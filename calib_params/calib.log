@@ -1,0 +1,5 @@
+Camera 0: detected tags from 123 imgs
+Camera 1: detected tags from 125 imgs
+Camera 0: normal model avg reproj_error = 0.31748 corner# 11544
+Camera 1: normal model avg reproj_error = 0.2997 corner# 12216
+stereo calib uses 65 img pairs
