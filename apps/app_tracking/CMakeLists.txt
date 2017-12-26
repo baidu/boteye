@@ -12,7 +12,7 @@ if (find_index GREATER -1)
 else()
   message(STATUS "Couldn't find libopencv_viz")
 endif()
-#add_definitions(-DSHOW_POSE_2D)
+add_definitions(-DSHOW_POSE_2D)
 
 add_executable(${PROJECT_NAME}
  plotting_utils.h
@@ -43,6 +43,7 @@ if(EnableRecognition)
     ${JSON_LIBRARY}
     ${FREETYPE_LIBRARY}
     ${CURL_LIBRARY}
+    crypto
 )
 endif()
 # ============================================

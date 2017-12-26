@@ -59,8 +59,27 @@ bool set_exp_percentage(int fd, int16_t val, bool verbose = false);
 bool set_gain_percentage(int fd, int16_t val, bool verbose = false);
 int set_auto_exp_and_gain(int fd, bool ae, bool ag);
 bool xp_imu_embed_img(int fd, bool enable);
+struct tlc59116_ctl_t {
+  uint8_t UpdateBit: 1;
+  uint8_t dumpRegister: 1;
+  uint8_t WriteRegister: 1;
+  uint8_t SetCH_on_mode: 1;
+  uint8_t SetCH_pwm_mode: 1;
+  uint8_t : 3;
+  uint8_t pwm_value;
+  uint16_t channel_value;
+};
+enum infrared_mode_t {
+  off = 0,
+  on = 1,
+  pwm = 2
+};
+const uint32_t infrared_pwm_max = 255;
+bool xp_infrared_ctl(int fd, infrared_mode_t infrared_mode, uint16_t channel_value,
+                     uint8_t pwm_value);
+bool xp_tl59116_dump_register(int fd);
 #endif  // __linux__
-uint64_t get_timestamp_in_img(uint8_t* data);
+uint64_t get_timestamp_in_img(const uint8_t* data);
 bool stamp_timestamp_in_img(uint8_t* data, uint64_t time);
 #ifdef  __CYGWIN__
 class SharedMemoryReader {
@@ -102,14 +121,16 @@ class ImuReader {
   bool read(int fd,
             XP_DRIVER::LI_SENSOR::XP_20608_data* imu_data_ptr);
 #endif  // __linux__
-  bool get_imu_from_img(uint8_t* data, XP_DRIVER::LI_SENSOR::XP_20608_data* imu_data_ptr);
+  bool get_imu_from_img(const uint8_t* data,
+                        XP_DRIVER::LI_SENSOR::XP_20608_data* imu_data_ptr,
+                        const bool use_100us = false);
   int imu_rate() const;
   int imu_sample_count() const;
   uint64_t first_imu_clock_count() const;
 
  private:
-  bool get_vec3f_from_sensor_data(uint8_t* data, float* v);
-  bool get_vec3f_from_img_data(uint8_t* data, float* v);
+  bool get_vec3f_from_sensor_data(const uint8_t* data, float* v);
+  bool get_vec3f_from_img_data(const uint8_t* data, float* v);
 
  private:
   const float accel_scale_ = XP_BOARD_ACCEL_SCALE;

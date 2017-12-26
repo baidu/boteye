@@ -80,7 +80,7 @@ class PoseDrawer3D {
    *                       This value is re-computed by this function.
    */
   void viz3d_once(const cv::Affine3f& W_T_D,
-                  const cv::Mat_<uchar>& img = cv::Mat_<uchar>(),
+                  const cv::Mat& img = cv::Mat(),
                   const cv::Mat& rig_xyz_mat = cv::Mat(),
                   const cv::Mat_<cv::Vec3f>& depth_result_img = cv::Mat_<cv::Vec3f>());
   uchar key_pressed() const;

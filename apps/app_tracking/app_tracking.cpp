@@ -25,6 +25,20 @@
 // Parsing flags and logging
 #include <gflags/gflags.h>
 #include <glog/logging.h>
+#ifdef __CYGWIN__
+#include <Windows.h>  // for CPU binding
+#endif
+#ifdef HAS_RECOGNITION
+#include <fstream>
+#include <XP/util/aip/ocr.h> // NOLINT
+#include <XP/util/aip/image_classify.h> // NOLINT
+#include <XP/util/aip/face.h> // NOLINT
+#include <json/json.h> // NOLINT
+#include <curl/curl.h> // NOLINT
+#endif
+#include <opencv2/highgui.hpp>
+#include <opencv2/opencv.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
 // Stl used in this sample
 #include <mutex>
 #include <list>
@@ -33,31 +47,16 @@
 #include <string>
 #include <algorithm>
 #include <chrono>
-#include <fstream>  // NOLINT
 #include <memory>  // unique_ptr
-#ifdef __CYGWIN__
-#include <Windows.h>  // for CPU binding
-#endif
-#ifdef HAS_RECOGNITION
-#include <XP/util/aip/ocr.h>
-#include <XP/util/aip/image_classify.h>
-#include <XP/util/aip/face.h>
-#include <json/json.h>
-#include <curl/curl.h>
-#include <opencv2/highgui.hpp>
-#include <opencv2/opencv.hpp>
-#include <opencv2/imgproc/imgproc.hpp>
-#include <map>
-// #include <XP/util/i18nText.h>
 #include <thread>
-
+#include <map>
+#ifdef HAS_RECOGNITION
 std::string file_content;
 std::string ak = "EMPTY";
 std::string sk = "EMPTY";
 std::string aid = "EMPTY";
-// i18nText i18n;
 typedef cv::Point_<int> Point2i;
-cv::Mat image_for_api(480, 640, CV_8UC1);
+cv::Mat g_image_for_api;
 std::thread api_thread;
 bool run_flag = false;
 std::mutex mt1;
@@ -111,6 +110,13 @@ DEFINE_string(pb_save, "", "Protobuf map file to save at the end");
  */
 DEFINE_string(record_path, "",
               "the base folder of the recording file. Enable recording if specified");
+/** \brief Record the latest tracking live at record_path
+ *
+ * If empty, will not load anything and use live sensor defined by sensor_type
+ * If not empty, will load pre-recorded data and ignore live sensor input
+ */
+DEFINE_string(load_path, "",
+              "where to load the recording file. If set, no live sensor can be used.");
 /** \brief Bag of words file to load
  *
  * Bag of words is used to relocate from getting lost as well as used for loop closure detection
@@ -157,7 +163,7 @@ DEFINE_string(path_follower, "", "specify path follower type: robot, walk");
  *
  * These flags only take effect when path_follower walk is enabled.
  */
-DEFINE_string(guide_ip, "", "the ip that the UDP guide message is sent to.e.g. 127.0.0.1");
+DEFINE_string(guide_ip, "", "the ip that the UDP guide message is sent to. e.g. 127.0.0.1");
 /** \brief The UDP port that the tracking app will send guide message to.
  *
  * These flags only take effect when path_follower walk is enabled.
@@ -167,15 +173,8 @@ DEFINE_int32(guide_port, -1, "the port that the UDP guide message is sent to. -1
  *
  * LI: LI sensor
  * XP: XP sensor
- * OCV: use openCV to run XP sensor (experimental)
  */
-DEFINE_string(sensor_type,
-#ifdef __linux__
-  "XP",  // XP camera module is the default sensor in Linux
-#else
-  "OCV",  // use opencv driver (experimental) for non-linux
-#endif
-  "LI, XP, XP2, OCV");
+DEFINE_string(sensor_type, "XP", "LI, XP, XP2, XP3");
 /** \brief Where does the video sensor open
  *
  */
@@ -203,6 +202,12 @@ DEFINE_string(vis_img_save_path, "", "Save every visualization img"
  * Not showing X window saves computing time
  */
 DEFINE_bool(no_display, false, "do not show any X windows");
+/** \brief the width of the window for displaying
+ *
+ * The width of the window for displaying
+ * If the width is narrower than the actual image, the program may crash
+ */
+DEFINE_int32(display_img_w, 640, "the width of the window for displaying");
 
 /** \brief Whether or not pull imu from image data
  *
@@ -213,28 +218,25 @@ DEFINE_bool(imu_from_image, false, "Do not load imu from image");
 /** \brief Callback function for getting raw images
  *
  * This callback function will be registered inside the tracker.
- * \param img_l left image
+ * \param img_l left image.  Gray for LI, XP, XP2.  Color for XP3
  * \param img_r right image
  * \param timestamp the timetamp (in seconds) of the images
  */
-static std::shared_ptr<cv::Mat_<uchar>> g_img_l_ptr;
-void raw_sensor_img_callback(const cv::Mat_<uchar>& img_l,
-                             const cv::Mat_<uchar>& img_r,
-                             float timestamp) {
-  if (g_img_l_ptr == nullptr) return;
+static std::shared_ptr<cv::Mat> g_img_l_ptr;  // [NOTE] g_img_l_ptr is NOT 100% thread-safe
+void raw_sensor_img_callback(const cv::Mat& img_l, const cv::Mat& img_r, float timestamp) {
+  if (g_img_l_ptr == nullptr) {
+    return;
+  }
   if (g_img_l_ptr->rows == 0) {
-    g_img_l_ptr->create(img_l.size());
+    g_img_l_ptr->create(img_l.size(), img_l.type());
   }
   img_l.copyTo(*g_img_l_ptr);
 }
 
 #ifdef HAS_RECOGNITION
 DEFINE_bool(face_attribute, false, "enable face attribute");
-
 DEFINE_bool(ocr, false, "enable ocr");
-
 DEFINE_bool(face_recognition, false, "enable face recognition");
-
 DEFINE_bool(object_detection, false, "enable object detection");
 
 void read_api_keys() {
@@ -280,9 +282,9 @@ void face_attribute() {
     "race " + root["result"][0]["race"].asString() + "  " +
     "gender:" + root["result"][0]["gender"].asString();
   mt1.lock();
-  cv::putText(image_for_api, output1, cv::Point(30, 60),
+  cv::putText(g_image_for_api, output1, cv::Point(30, 60),
     cv::FONT_HERSHEY_COMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
-  cv::putText(image_for_api, output2, cv::Point(30, 80),
+  cv::putText(g_image_for_api, output2, cv::Point(30, 80),
     cv::FONT_HERSHEY_COMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
   Point2i a(root["result"][0]["location"]["left"].asInt(),
     root["result"][0]["location"]["top"].asInt());
@@ -290,7 +292,7 @@ void face_attribute() {
     + root["result"][0]["location"]["width"].asInt(),
     root["result"][0]["location"]["top"].asInt() +
     root["result"][0]["location"]["height"].asInt());
-  cv::rectangle(image_for_api, a, b, cv::Scalar(255, 255, 255), 1);
+  cv::rectangle(g_image_for_api, a, b, cv::Scalar(255, 255, 255), 1);
   mt1.unlock();
 }
 
@@ -309,7 +311,7 @@ void face_recognition() {
     std::string output = root["result"][0]["uid"].asString() +
       ": " + root["result"][0]["user_info"].asString() + " Score: " +
       root["result"][0]["scores"][0].asString();
-    cv::putText(image_for_api, output.c_str(), cv::Point(30, 450),
+    cv::putText(g_image_for_api, output.c_str(), cv::Point(30, 450),
       cv::FONT_HERSHEY_COMPLEX, 0.5, cv::Scalar(255, 255, 255), 1);
     mt1.unlock();
   }
@@ -327,30 +329,28 @@ void ocr() {
 
 void thread_apis() {
   while (run_flag) {
-      cv::imwrite("/tmp/1.jpg", *g_img_l_ptr);
-      image_for_api = cv::imread("/tmp/1.jpg", CV_8UC1);
-      aip::get_file_content("/tmp/1.jpg", &file_content);
-
-      std::vector<std::thread> thread_pool;
-      if (FLAGS_face_attribute)
-        thread_pool.push_back(std::thread(face_attribute));
-      if (FLAGS_face_recognition)
-        thread_pool.push_back(std::thread(face_recognition));
-      if (FLAGS_ocr)
-        thread_pool.push_back(std::thread(ocr));
-      // object detection is postponed before AIP can provide corresponding API
-      // thread_pool.push_back(std::thread(object_detection));
-
-      for (auto& t : thread_pool) {
-        t.join();
-      }
-      if (image_for_api.cols > 0)
-        imshow("recognition", image_for_api);
-      run_flag = false;
+    cv::imwrite("/tmp/1.jpg", *g_img_l_ptr);
+    g_image_for_api = cv::imread("/tmp/1.jpg", CV_LOAD_IMAGE_COLOR);
+    aip::get_file_content("/tmp/1.jpg", &file_content);
+    std::vector<std::thread> thread_pool;
+    if (FLAGS_face_attribute)
+      thread_pool.push_back(std::thread(face_attribute));
+    if (FLAGS_face_recognition)
+      thread_pool.push_back(std::thread(face_recognition));
+    if (FLAGS_ocr)
+      thread_pool.push_back(std::thread(ocr));
+    // object detection is postponed before AIP can provide corresponding API
+    // thread_pool.push_back(std::thread(object_detection));
+    for (auto& t : thread_pool) {
+      t.join();
+    }
+    if (g_image_for_api.cols > 0)
+      imshow("recognition", g_image_for_api);
+    run_flag = false;
   }
 }
+#endif  // HAS_RECOGNITION
 
-#endif
 /// \brief udp ip and port
 int g_udp_socket = -1;
 struct sockaddr_in g_udp_addr;
@@ -378,6 +378,7 @@ void path_follower_walk_callback(const XP_TRACKER::GuideMessage& guide_message) 
     g_udp_addr.sin_addr.s_addr = inet_addr(FLAGS_guide_ip.c_str());
     g_udp_addr.sin_port = htons(FLAGS_guide_port);
   }
+
   if (sendto(g_udp_socket, &guide_message, sizeof(guide_message), 0,
              (struct sockaddr *)&g_udp_addr, sizeof(g_udp_addr)) < 0) {
     LOG(ERROR) << "sendto() failed -> " << FLAGS_guide_ip << ":" << FLAGS_guide_port;
@@ -406,37 +407,21 @@ int main(int argc, char **argv) {
     LOG(ERROR) << "Cannot find opencv_viz. viz3d is invalid";
   }
 #endif  // HAS_OPENCV_VIZ
-  if (FLAGS_sensor_type == "LI") {
-    if (!XP_TRACKER::init_sensor_LI(FLAGS_sensor_dev_path,
-                                    !FLAGS_disable_auto_gain)) {
-      LOG(ERROR) << "!XP_TRACKER::init_sensor_LI()";
-      return -1;
-    }
-  } else if (FLAGS_sensor_type == "XP") {
-    if (!XP_TRACKER::init_sensor_XP(FLAGS_sensor_dev_path,
-                                    FLAGS_imu_dev_path,
-                                    !FLAGS_disable_auto_gain,
-                                    FLAGS_imu_from_image)) {
-      LOG(ERROR) << "!XP_TRACKER::init_sensor_XP()";
-      return -1;
-    }
-  } else if (FLAGS_sensor_type == "XP2") {
-    if (!XP_TRACKER::init_sensor_XP2(FLAGS_sensor_dev_path,
-                                    FLAGS_imu_dev_path,
-                                    !FLAGS_disable_auto_gain,
-                                    FLAGS_imu_from_image)) {
-      LOG(ERROR) << "!XP_TRACKER::init_sensor_XP2()";
-      return -1;
-    }
-  } else if (FLAGS_sensor_type == "OCV") {
-    if (!XP_TRACKER::init_sensor_OCV(!FLAGS_disable_auto_gain)) {
-      LOG(ERROR) << "!XP_TRACKER::init_sensor_OCV()";
+  if (!FLAGS_load_path.empty()) {
+    if (!XP_TRACKER::init_data_loader(FLAGS_load_path)) {
+      LOG(ERROR) << "!XP_TRACKER::init_data_loader()";
       return -1;
     }
   } else {
-    LOG(ERROR) << "sensor_type " << FLAGS_sensor_type << " not supported";
-    return -1;
+    if (!XP_TRACKER::init_sensor(FLAGS_sensor_type,
+                                 !FLAGS_disable_auto_gain,
+                                 FLAGS_imu_from_image,
+                                 FLAGS_sensor_dev_path)) {
+      LOG(ERROR) << "!XP_TRACKER::init_sensor()";
+      return -1;
+    }
   }
+
   if (FLAGS_vio_config.empty()) {
     const char* env_p = std::getenv("MASTER_DIR");
     if (env_p == nullptr) {
@@ -496,8 +481,7 @@ int main(int argc, char **argv) {
       if (FLAGS_path_follower == "robot") {
         is_path_follower_set = XP_TRACKER::set_path_follower_robot();
       } else if (FLAGS_path_follower == "walk") {
-        is_path_follower_set =
-            XP_TRACKER::set_path_follower_walk_callback(path_follower_walk_callback);
+        is_path_follower_set = XP_TRACKER::set_path_follower_walk(path_follower_walk_callback);
       } else {
         LOG(ERROR) << "Not supported path follower type: " << FLAGS_path_follower;
         return -1;
@@ -509,7 +493,7 @@ int main(int argc, char **argv) {
   }
   // The properties of cameras
   constexpr int img_h = 480;
-  int img_w = 640;
+  int img_w = FLAGS_display_img_w;
 #ifdef __linux__
   const char* env_display_p = std::getenv("DISPLAY");
   if (env_display_p == nullptr) {
@@ -518,17 +502,22 @@ int main(int argc, char **argv) {
   }
 #endif
   // set sensor data callback
-  g_img_l_ptr.reset(new cv::Mat_<uchar>);
-  cv::Mat_<uchar>& img_l = *g_img_l_ptr;
+  g_img_l_ptr.reset(new cv::Mat());
   if (FLAGS_show_simple || FLAGS_viz3d) {
     XP_TRACKER::set_stereo_images_callback(
-      std::bind(&raw_sensor_img_callback,
-                std::placeholders::_1, std::placeholders::_2,
-                std::placeholders::_3));
+        std::bind(&raw_sensor_img_callback,
+                  std::placeholders::_1, std::placeholders::_2,
+                  std::placeholders::_3));
   }
-  #ifdef HAS_RECOGNITION
-
-  #endif
+#ifdef HAS_RECOGNITION
+  if (FLAGS_face_recognition || FLAGS_face_attribute || FLAGS_ocr) {
+    XP_TRACKER::set_stereo_images_callback(
+        std::bind(&raw_sensor_img_callback,
+                  std::placeholders::_1, std::placeholders::_2,
+                  std::placeholders::_3));
+    read_api_keys();
+  }
+#endif
   // set live recording path if not empty
   // [NOTE] Calling multiple times of run_tracker_MT will overwrite and only record the
   //        latest session.
@@ -621,15 +610,12 @@ int main(int argc, char **argv) {
       }  // FLAGS_show_simple
       cv::imshow("Top View & Left Camera", top_down_and_camera_canvas);
     }  // FLAGS_viz3d
-
-
-
     // Set depth canvas to start depth computation in tracker
     if (FLAGS_show_depth) {
       // depth is computed on half resolution
       // use CAMERA_IMG_HEIGHT CAMERA_IMG_WIDTH as dim to see distorted images
       // Set depth view canvas even if viz3d is used
-      depth_view_canvas.create(img_h / 2, img_w / 2, CV_8UC3);
+      depth_view_canvas.create(img_h, img_w, CV_8UC3);
       XP_TRACKER::set_depth_view_canvas(&depth_view_canvas);
       if (!FLAGS_viz3d) {
         cv::namedWindow("Depth");
@@ -651,15 +637,6 @@ int main(int argc, char **argv) {
     LOG(ERROR) << "run_tracker_MT failed";
     return -1;
   }
-  #ifdef HAS_RECOGNITION
-  if (FLAGS_face_recognition || FLAGS_face_attribute || FLAGS_ocr) {
-    XP_TRACKER::set_stereo_images_callback(
-      std::bind(&raw_sensor_img_callback,
-              std::placeholders::_1, std::placeholders::_2,
-              std::placeholders::_3));
-    read_api_keys();
-  }
-  #endif
   // cache for depth result
   cv::Mat_<cv::Vec3f> depth_result_img;
   if (!FLAGS_no_display) {
@@ -731,10 +708,20 @@ int main(int argc, char **argv) {
         if (FLAGS_show_simple) {
           if (g_img_l_ptr->rows != 0) {
             CHECK_EQ(g_img_l_ptr->size(), camera_view_canvas.size());
-            cv::cvtColor(*g_img_l_ptr, camera_view_canvas, CV_GRAY2BGR);
+            if (g_img_l_ptr->channels() == 1) {
+              cv::cvtColor(*g_img_l_ptr, camera_view_canvas, CV_GRAY2BGR);
+            } else {
+              g_img_l_ptr->copyTo(camera_view_canvas);
+            }
           }
         }
-        XP_TRACKER::draw_once();
+        if (!XP_TRACKER::draw_once()) {
+          // very likely tracker stops running
+          std::cout << "!XP_TRACKER::draw_once()" << std::endl;
+          // sleep for 1 sec so all threads can stop properly
+          sleep(1);
+          ESC_pressed = true;
+        }
         cv::imshow("Top View & Left Camera", top_down_and_camera_canvas);
 #ifndef __CYGWIN__
         if (!FLAGS_vis_img_save_path.empty()) {
@@ -785,13 +772,13 @@ int main(int argc, char **argv) {
           XP_TRACKER::set_static(true);
         } else if (key_pressed == 'M' || key_pressed == 'm') {
           XP_TRACKER::set_static(false);
-        #ifdef HAS_RECOGNITION
+#ifdef HAS_RECOGNITION
         } else if (key_pressed == 'r') {
           run_flag = !run_flag;
           if (run_flag) {
             std::thread(thread_apis).detach();
           }
-        #endif
+#endif
         } else if (key_pressed == -1) {
           // nothing is pressed
         } else {

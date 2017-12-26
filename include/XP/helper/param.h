@@ -17,7 +17,8 @@
 #define XP_INCLUDE_XP_HELPER_PARAM_H_
 
 #include <yaml-cpp/yaml.h>
-
+#include <unistd.h>
+#include <glog/logging.h>
 #include <Eigen/Core>
 #include <opencv2/opencv.hpp>
 #include <string>
@@ -109,8 +110,6 @@ class AlgorithmParam : public ParamBase {
     float orb_match_thresh_test_ratio = 0.9;
     float feature_uncertainty = 5;
     int imaging_FPS = 20;
-    int imaging_exposure = 100;
-    int imaging_gain = 100;
     int aec_index = 100;
     bool use_of_id = true;
     bool use_april_tag = false;
@@ -184,8 +183,166 @@ class DuoCalibParam : public ParamBase {
     LI = 2,
     XP = 3,
     XP2 = 4,
-    XP3 = 5,
+    XP3 = 5,   // color sensor
+    XP3s = 6   // renwoxing sensor
   } sensor_type;
+};
+
+class ThreadParam : public ParamBase {
+  static const int NO_BOUND_TO_CPU_CORE = -1;
+
+ public:
+  struct affinity_cpu_core {
+    affinity_cpu_core() :
+    mapper_thread_cpuid(NO_BOUND_TO_CPU_CORE),
+    frame_feat_det_thread_cpuid(NO_BOUND_TO_CPU_CORE),
+    pull_li_imu_thread_cpuid(NO_BOUND_TO_CPU_CORE),
+    stream_li_images_thread_cpuid(NO_BOUND_TO_CPU_CORE),
+    multiframe_consumer_thread_cpuid(NO_BOUND_TO_CPU_CORE),
+    draw_thread_cpuid(NO_BOUND_TO_CPU_CORE),
+    matching_thread_cpuid(NO_BOUND_TO_CPU_CORE),
+    optimization_thread_cpuid(NO_BOUND_TO_CPU_CORE),
+    heartBeatDetector_thread_cpuid(NO_BOUND_TO_CPU_CORE),
+    visualization_cpuid(NO_BOUND_TO_CPU_CORE),
+    vizReprojection_cpuid(NO_BOUND_TO_CPU_CORE),
+    imuConsumer_cpuid(NO_BOUND_TO_CPU_CORE),
+    publisher_cpuid(NO_BOUND_TO_CPU_CORE) {
+    }
+    void print_affinity_cpu_core() const {
+      std::cout << "mapper cpu id:                     " << mapper_thread_cpuid << "\n";
+      std::cout << "frame feature detection cpu id:    " << frame_feat_det_thread_cpuid << "\n";
+      std::cout << "pull LI imu cpu id:                " << pull_li_imu_thread_cpuid << "\n";
+      std::cout << "steam LI images cpu id:            "
+                << stream_li_images_thread_cpuid << "\n";
+      std::cout << "multi frame consumer loop cpu id:  "
+                << multiframe_consumer_thread_cpuid << "\n";
+      std::cout << "draw cpu id:                       " << draw_thread_cpuid << "\n";
+      std::cout << "matching loop cpu id:              " << matching_thread_cpuid << "\n";
+      std::cout << "optimization loop cpu id:          " << optimization_thread_cpuid << "\n";
+      std::cout << "heart beat detector cpu id:        "
+                << heartBeatDetector_thread_cpuid << "\n";
+      std::cout << "publisher cpu id:                  " << publisher_cpuid << "\n";
+      std::cout << "vizReprojection cpu id:            " << vizReprojection_cpuid << "\n";
+      std::cout << "visualization cpu id:              " << visualization_cpuid << "\n";
+      std::cout << "imu consumer cpu id:               " << imuConsumer_cpuid << "\n";
+    }
+    // Check user's settings, if it's invalid
+    // corresponding cpu id will be reseted to default value: -1
+    void check_affinity_cpu_core() {
+      int max_cpu_cores = sysconf(_SC_NPROCESSORS_ONLN);
+      if (static_cast<unsigned int>(mapper_thread_cpuid) >= max_cpu_cores) {
+        mapper_thread_cpuid = NO_BOUND_TO_CPU_CORE;
+      }
+      if (static_cast<unsigned int>(frame_feat_det_thread_cpuid) >= max_cpu_cores) {
+        frame_feat_det_thread_cpuid = NO_BOUND_TO_CPU_CORE;
+      }
+      if (static_cast<unsigned int>(pull_li_imu_thread_cpuid) >= max_cpu_cores) {
+        pull_li_imu_thread_cpuid = NO_BOUND_TO_CPU_CORE;
+      }
+      if (static_cast<unsigned int>(stream_li_images_thread_cpuid) >= max_cpu_cores) {
+        stream_li_images_thread_cpuid = NO_BOUND_TO_CPU_CORE;
+      }
+      if (static_cast<unsigned int>(multiframe_consumer_thread_cpuid) >= max_cpu_cores) {
+        multiframe_consumer_thread_cpuid = NO_BOUND_TO_CPU_CORE;
+      }
+      if (static_cast<unsigned int>(draw_thread_cpuid) >= max_cpu_cores) {
+        draw_thread_cpuid = NO_BOUND_TO_CPU_CORE;
+      }
+      if (static_cast<unsigned int>(matching_thread_cpuid) >= max_cpu_cores) {
+        matching_thread_cpuid = NO_BOUND_TO_CPU_CORE;
+      }
+      if (static_cast<unsigned int>(optimization_thread_cpuid) >= max_cpu_cores) {
+        optimization_thread_cpuid = NO_BOUND_TO_CPU_CORE;
+      }
+      if (static_cast<unsigned int>(heartBeatDetector_thread_cpuid) >= max_cpu_cores) {
+        heartBeatDetector_thread_cpuid = NO_BOUND_TO_CPU_CORE;
+      }
+      if (static_cast<unsigned int>(publisher_cpuid) >= max_cpu_cores) {
+        publisher_cpuid = NO_BOUND_TO_CPU_CORE;
+      }
+      if (static_cast<unsigned int>(vizReprojection_cpuid) >= max_cpu_cores) {
+        vizReprojection_cpuid = NO_BOUND_TO_CPU_CORE;
+      }
+      if (static_cast<unsigned int>(visualization_cpuid) >= max_cpu_cores) {
+        visualization_cpuid = NO_BOUND_TO_CPU_CORE;
+      }
+      if (static_cast<unsigned int>(imuConsumer_cpuid) >= max_cpu_cores) {
+        imuConsumer_cpuid = NO_BOUND_TO_CPU_CORE;
+      }
+    }
+    // frontend
+    int mapper_thread_cpuid;
+    int frame_feat_det_thread_cpuid;
+    int pull_li_imu_thread_cpuid;
+    int stream_li_images_thread_cpuid;
+    int multiframe_consumer_thread_cpuid;
+    int draw_thread_cpuid;
+    // backend
+    int matching_thread_cpuid;
+    int optimization_thread_cpuid;
+    // other
+    int heartBeatDetector_thread_cpuid;
+    int publisher_cpuid;
+    int vizReprojection_cpuid;
+    int visualization_cpuid;
+    int imuConsumer_cpuid;
+  };
+
+ public:
+  ThreadParam() {
+  }
+  bool LoadFromYaml(const std::string& filename) override;
+  bool WriteToYaml(const std::string& filename) override;
+  bool LoadFromCvYaml(const std::string& filename) override;
+  bool WriteToCvYaml(const std::string& filename) override;
+  void PrintThreadParam(void) const {
+    m_affinity_cpu_core.print_affinity_cpu_core();
+  }
+  void CheckThreadParam() {
+    m_affinity_cpu_core.check_affinity_cpu_core();
+  }
+  inline int get_mapper_cpu_id() const {
+    return m_affinity_cpu_core.mapper_thread_cpuid;
+  }
+  inline int get_frame_feat_det_cpu_id() const {
+    return m_affinity_cpu_core.frame_feat_det_thread_cpuid;
+  }
+  inline int get_pull_li_img_cpu_id() const {
+    return m_affinity_cpu_core.pull_li_imu_thread_cpuid;
+  }
+  inline int get_stream_li_images_cpu_id() const {
+    return m_affinity_cpu_core.stream_li_images_thread_cpuid;
+  }
+  inline int get_multi_frame_consumer_loop_cpu_id() const {
+    return m_affinity_cpu_core.multiframe_consumer_thread_cpuid;
+  }
+  inline int get_draw_cpu_id() const {
+    return m_affinity_cpu_core.draw_thread_cpuid;
+  }
+  inline int get_matching_loop_cpu_id() const {
+    return m_affinity_cpu_core.matching_thread_cpuid;
+  }
+  inline int get_optimization_loop_cpu_id() const {
+    return m_affinity_cpu_core.optimization_thread_cpuid;
+  }
+  inline int get_hearbeat_detector_cpuid() const {
+    return m_affinity_cpu_core.heartBeatDetector_thread_cpuid;
+  }
+  inline int get_visualization_cpuid() const {
+    return m_affinity_cpu_core.visualization_cpuid;
+  }
+  inline int get_imu_consumer_cpuid() const {
+    return m_affinity_cpu_core.imuConsumer_cpuid;
+  }
+  inline int get_publisher_cpuid() const {
+    return m_affinity_cpu_core.publisher_cpuid;
+  }
+  inline int get_viz_reprojection_cpuid() const {
+    return m_affinity_cpu_core.vizReprojection_cpuid;
+  }
+
+ private:
+  affinity_cpu_core m_affinity_cpu_core;
 };
 
 // Helper functions to load calibration parameters from calib.yaml

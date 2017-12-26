@@ -20,6 +20,62 @@
 #include <vector>
 
 namespace XP {
+class AutoWhiteBalance {
+ public:
+  inline AutoWhiteBalance(bool use_preset = false, float coeff_r = 1.f,
+    float coeff_g = 1.f, float coeff_b = 1.f) :
+    m_use_preset_(use_preset) {
+    if (m_use_preset_) {
+      m_coeff_r_ = coeff_r;
+      m_coeff_g_ = coeff_g;
+      m_coeff_b_ = coeff_b;
+    }
+  }
+  inline ~AutoWhiteBalance() {
+  }
+  inline void run(cv::Mat* rgb_img_ptr) {
+    CHECK_EQ(rgb_img_ptr != NULL, true);
+    CHECK_EQ(rgb_img_ptr->channels(), 3);
+    CHECK_EQ(rgb_img_ptr->type(), CV_8UC3);
+    if (!m_use_preset_) {
+      compute_AWB_coefficients(*rgb_img_ptr);
+    }
+    correct_white_balance_coefficients(rgb_img_ptr);
+  }
+
+  inline void setWhiteBalancePresetMode(float coeff_r,
+    float coeff_g, float coeff_b) {
+    m_coeff_r_ = coeff_r;
+    m_coeff_g_ = coeff_g;
+    m_coeff_b_ = coeff_b;
+    m_use_preset_ = true;
+  }
+
+  inline void setAutoWhiteBalanceMode() {
+    m_use_preset_ = false;
+  }
+
+ private:
+  void compute_RGB_mean(const cv::Mat& rgb_img_,
+                               uint32_t* ptr_r_mean,
+                               uint32_t* ptr_g_mean,
+                               uint32_t* ptr_b_mean) const;
+#ifdef __ARM_NEON__
+  void compute_RGB_mean_neon(const cv::Mat& rgb_img_,
+                                    uint32_t* ptr_r_mean,
+                                    uint32_t* ptr_g_mean,
+                                    uint32_t* ptr_b_mean) const;
+  void correct_white_balance_coefficients_neon(cv::Mat* rgb_img_ptr);
+#endif  // __ARM_NEON__
+
+  void compute_AWB_coefficients(const cv::Mat& rgb_img_);
+  void correct_white_balance_coefficients(cv::Mat* rgb_img_ptr);
+
+  bool m_use_preset_;
+  float m_coeff_r_;
+  float m_coeff_g_;
+  float m_coeff_b_;
+};
 // return true if better value if found
 bool computeNewGainAndExposure(const cv::Mat& raw_img,
                                uint32_t* gain_ptr,

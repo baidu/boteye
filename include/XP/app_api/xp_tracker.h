@@ -22,53 +22,27 @@
 #include <functional>
 
 namespace XP_TRACKER {
-/**
- * \brief Initialzie the LI sensor with LI driver. This has to be called before init_tracker
- * \brief If this fails, it is a driver issue.
- *        Currently, only supports LI sensor on Linux OS.  Will return false for other OS.
- * \param auto_gain Whether or not use auto gain and exposure control.
- * \param FPS Range [1 - 30]. 20 is typicall a good value. 30 may drop frames. 10 is not robust.
- * \return success or not
- */
-bool init_sensor_LI(const std::string& sensor_file,
-                    bool auto_gain = true);
-/**
- * \brief Initialzie the XP sensor with XP driver. This has to be called before init_tracker
- * \brief If this fails, it is a driver issue.
- *        Currently, only supports XP sensor on Linux OS.  Will return false for other OS.
- * \param video_file file to the video device (e.g. /dev/video1)
- * \param imu_file file to the imu device (e.g. /dev/ttyUSB1)
- * \param auto_gain Whether or not use auto gain and exposure control.
- * \param imu_from_image Whether or not pull imu from image data.
- * \return success or not
- */
-bool init_sensor_XP(const std::string& video_file,
-                    const std::string& imu_file,
-                    bool auto_gain = true,
-                    bool imu_from_image = false);
-/**
- * \brief Initialzie the XP sensor with XP driver. This has to be called before init_tracker
- * \brief If this fails, it is a driver issue.
- *        Currently, only supports XP sensor on Linux OS.  Will return false for other OS.
- * \param video_file file to the video device (e.g. /dev/video1)
- * \param imu_file file to the imu device (e.g. /dev/ttyUSB1)
- * \param imu_from_image Whether or not pull imu from image data.
- * \param auto_gain Whether or not use auto gain and exposure control.
- * \return success or not
- */
-bool init_sensor_XP2(const std::string& video_file,
-                     const std::string& imu_file,
-                     bool auto_gain = true,
-                     bool imu_from_image = false);
-/**
-* \brief Initialzie the XP sensor with opencv driver. This has to be called before init_tracker
-* \brief This has to be run with xperception customized OpenCV.
-*        Currently, only working with standard OpenCV.
-* \param auto_gain Whether or not use auto gain and exposure control.
-* \return success or not
-*/
-bool init_sensor_OCV(bool auto_gain = true);
 
+/**
+ * \brief Initialize the sensor. This has to be called before init_tracker.
+ *        If this fails, it can be a driver / firmware / hardware issue.
+ * \param sensor_type Currently support LI, XP, XP2, XP3
+ * \param auto_gain Whether or not to use auto gain / exposure control
+ * \param imu_from_image Whether or not to pull imu from image data
+ * \param sensor_dev_path File to the sensor (e.g. /dev/video1)
+ */
+bool init_sensor(const std::string& sensor_type,
+                 const bool auto_gain = true,
+                 const bool imu_from_image = false,
+                 const std::string sensor_dev_path = "");
+
+/**
+ * \brief Initialzie the data loader that loads images and imu from a folder.
+ *        The data loader will disable all kinds of live sensor
+ * \param folder_path where to load the data (similar to record_path)
+ * \return success or not
+ */
+bool init_data_loader(const std::string& folder_path);
 
 /**
  * \brief Initialize tracking algorithms
@@ -156,7 +130,7 @@ bool set_path_follower_robot();
  * \brief Register callback functions for getting walk guide information
  * \param callback the call back function if a new walk guide message is ready
  */
-bool set_path_follower_walk_callback(const XP_TRACKER::GuideMessageCallback& callback);
+bool set_path_follower_walk(const XP_TRACKER::GuideMessageCallback& callback);
 
 /**
  * \brief Save draw canvas for path follower control image.
@@ -191,8 +165,7 @@ bool draw_once();
  * \brief Callback function for getting raw imgs
  * left img, right img, timestamp in seconds
  */
-typedef std::function<void(const cv::Mat_<uchar>&,
-                           const cv::Mat_<uchar>&, float)> StereoImagesCallback;
+typedef std::function<void(const cv::Mat&, const cv::Mat&, float)> StereoImagesCallback;
 /**
  * \brief Register callback functions for getting raw imgs
  * \param callback the call back function if a new image pair is ready. This call back will

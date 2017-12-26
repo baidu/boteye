@@ -14,10 +14,11 @@
  * limitations under the License.
  *****************************************************************************/
 
-#ifndef XP_UTIL_DEPTH_UTILS_H_
-#define XP_UTIL_DEPTH_UTILS_H_
+#ifndef XP_INCLUDE_XP_UTIL_DEPTH_UTILS_H_
+#define XP_INCLUDE_XP_UTIL_DEPTH_UTILS_H_
 
 #include <XP/helper/param.h>
+#include <vector>
 namespace XP {
 bool multilevel_stereoBM(const DuoCalibParam& duo_calib_param,
                          const cv::Mat& l_img,
@@ -25,15 +26,17 @@ bool multilevel_stereoBM(const DuoCalibParam& duo_calib_param,
                          cv::Mat* disparity_ptr,
                          std::vector<cv::Mat>* disparity_ml_ptr,
                          int start_level = 0,  // set to higher level to reduce time
-                         int end_level = 4);
+                         int end_level = 4,
+                         cv::Mat* buf = nullptr);
 
-inline cv::Vec3b depth16S2color(int16_t depth) {
-  // 255 / 16 ~= 16
-  // opencv disparity result in 16S is multiplied by 16
-  int val = depth * 8 / 16;
-  if (val <= 0) {
+inline cv::Vec3b depth16S2color(int16_t disparity16S) {
+  if (disparity16S <= 0) {
     return cv::Vec3b(0, 0, 0);
   }
+  // 255 / 16 ~= 16
+  // opencv disparity result in 16S is multiplied by 16
+  constexpr int max_disp_pixel = 64;
+  int val = static_cast<int>(disparity16S) * 255 / max_disp_pixel / 16;
   if (val > 255) val = 255;
   uchar r = 0, g = 0, b = 0;
   if (val > 128) {
@@ -45,5 +48,5 @@ inline cv::Vec3b depth16S2color(int16_t depth) {
   }
   return cv::Vec3b(b, g, r);
 }
-} // namespace XP
-#endif  // XP_UTIL_DEPTH_UTILS_H_
+}  // namespace XP
+#endif  // XP_INCLUDE_XP_UTIL_DEPTH_UTILS_H_

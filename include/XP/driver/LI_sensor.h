@@ -28,6 +28,8 @@
 #endif
 namespace XP_DRIVER {
 namespace LI_SENSOR {
+
+// TODO(mingyu): reorganize the shared parts to another place
 struct XP_20608_data {
   uint64_t clock_count;
   float accel[3];

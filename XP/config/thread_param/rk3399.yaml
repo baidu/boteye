@@ -1,0 +1,13 @@
+Mapper Thread: 3
+Feature Detection Thread: 0
+Pull LI IMU Thread: 0
+Image Stream Thread: 0
+Multiframe Consumer Thread: 1
+Drawing Thread: 1
+Matching Thread: 1
+Optimization Thread: 5
+IMU Consumer Thread: 0
+Heartbeat Detector Thread: 3
+Publisher Thread: 0
+Visualization Thread: 3
+VizReprojection Thread: 1

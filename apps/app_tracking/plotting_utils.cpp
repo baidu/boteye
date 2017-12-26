@@ -107,7 +107,7 @@ void viz3d_keyboard_cb(const cv::viz::KeyboardEvent& callback,
  */
 PoseDrawer3D::PoseDrawer3D(float viz_cam_height,
                            const cv::Matx33f& cam_K) :
-  img3d_{cv::viz::WImage3D(cv::Mat_<uint8_t>(480, 640), cv::Size2f(0.16, 0.12))},
+  img3d_{cv::viz::WImage3D(cv::Mat(1, 1, CV_8UC1), cv::Size2f(0.16, 0.12))},  // placeholder
   viz3d_text_(cv::viz::WText("xPerception", cv::Point2i(10, 10), 40)),
   viz3d_view_mode_(TOP_VIEW_FOLLOW),
   key_pressed_(0),
@@ -135,7 +135,7 @@ PoseDrawer3D::PoseDrawer3D(float viz_cam_height,
   viz_window_ptr_->setBackgroundColor(cv::viz::Color::bluberry());
 }
 void PoseDrawer3D::viz3d_once(const cv::Affine3f& W_T_D,
-                              const cv::Mat_<uchar>& img,
+                              const cv::Mat& img,
                               const cv::Mat& rig_xyz_mat,
                               const cv::Mat_<cv::Vec3f>& depth_img) {
   // set the latest image as background
