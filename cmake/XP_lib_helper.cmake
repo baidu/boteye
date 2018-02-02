@@ -6,6 +6,7 @@
 # This script will set the following variables:
 #   XP_INCLUDE_DIR
 #   XP_LIBRARY
+#   XP_DRIVER_LIBRARY
 #   TagDetector_INCLUDE_DIR
 #   TagDetector_LIBRARY
 # ----------------------------------------------------------------------------
@@ -16,6 +17,11 @@ find_library(XP_LIBRARY XP
  PATHS ${CMAKE_CURRENT_SOURCE_DIR}/../lib_${CMAKE_SYSTEM_PROCESSOR}
 )
 set(XP_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+
+# XP_DRIVER_LIBRARY is set here
+find_library(XP_DRIVER_LIBRARY xpdriver
+ PATHS ${CMAKE_CURRENT_SOURCE_DIR}/../lib_${CMAKE_SYSTEM_PROCESSOR}
+)
 
 # TagDetector is set here
 find_library(TagDetector_LIBRARY TagDetector

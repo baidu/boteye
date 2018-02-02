@@ -13,15 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *****************************************************************************/
-#ifndef XP_INCLUDE_XP_HELPER_SHARED_QUEUE_H_
-#define XP_INCLUDE_XP_HELPER_SHARED_QUEUE_H_
+#ifndef INCLUDE_DRIVER_HELPER_SHARED_QUEUE_H_
+#define INCLUDE_DRIVER_HELPER_SHARED_QUEUE_H_
 
-#include <glog/logging.h>
+#include <driver/helper/xp_logging.h>
+#include <iostream>
 #include <deque>
 #include <mutex>
 #include <condition_variable>
 
-namespace XP {
+namespace XPDRIVER {
 
 namespace internal {
 
@@ -30,7 +31,7 @@ namespace internal {
 // std::deque has back()
 template <typename T>
 void pop_to_back(std::deque<T>* container, T* elem) {
-  CHECK(!container->empty());
+  XP_CHECK(!container->empty());
   *elem = std::move(container->back());
   container->clear();
 }
@@ -38,7 +39,7 @@ void pop_to_back(std::deque<T>* container, T* elem) {
 // For other container types that may not have back()
 template <typename T, typename OtherContainer>
 void pop_to_back(OtherContainer* container, T* elem) {
-  CHECK(!container->empty());
+  XP_CHECK(!container->empty());
   while (container->size() > 1) {
     container->pop_front();
   }
@@ -58,7 +59,7 @@ class shared_queue {
   ~shared_queue() {
     // make sure you always call kill before destruction
     if (!kill_ && !queue_.empty()) {
-      LOG(ERROR) << "shared_queue is destructed without getting killed";
+      XP_LOG_ERROR("shared_queue is destructed without getting killed");
     }
   }
 
@@ -150,5 +151,5 @@ class shared_queue {
   std::condition_variable cond_;
   bool kill_;
 };
-}  // namespace XP
-#endif  // XP_INCLUDE_XP_HELPER_SHARED_QUEUE_H_
+}  // namespace XPDRIVER
+#endif  // INCLUDE_DRIVER_HELPER_SHARED_QUEUE_H_

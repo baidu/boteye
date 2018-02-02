@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -90,7 +90,6 @@ class AlgorithmParam : public ParamBase {
     int local_ba_max_movalble_rig_num = 5;
     int feat_det_num = 200;
     int feat_det_pyra_level = 2;
-    float occupancy_vote_cell_size = 0.2;
     int feat_det_uniform_radius = 20;
     float run_dense_stereo_freq = 10;
     float camera_to_floor_height = 0.1;
@@ -127,8 +126,11 @@ class AlgorithmParam : public ParamBase {
     float H_inlier_pixel_dis = 0.025;  // 10 pixels with f = 400
     float matches_area_ratio = 0.5;  // 0 - 1
     int H_max_plane_num = 3;
-  };
-  Reloc_t Reloc;
+  } Reloc;
+  struct Navigation_t {
+    float base_velocity = 0.4;  // meter per second
+    uint8_t use_ultrasound = 0;
+  } Navigation;
   struct Nature_t {
     Eigen::Vector3f gravity;
   } Nature;

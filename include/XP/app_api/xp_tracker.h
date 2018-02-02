@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -138,6 +138,9 @@ bool set_path_follower_walk(const XP_TRACKER::GuideMessageCallback& callback);
  * \return success or not
  */
 bool set_path_follower_canvas(cv::Mat* canvas);
+
+bool set_generated_trajectory_file(const std::string& navigation_folder);
+
 /**
  * @brief send_command_to_mapper send a command to mapper. Check mapper implementation for
  *        supported commands, e.g. "AddTagToLastKeyFrame"
@@ -161,6 +164,12 @@ bool stop_tracker();
  * \brief Draw all the pre-set canvas once
  */
 bool draw_once();
+/**
+ * @brief check if duo_vio_tracker is still running
+ * @return true for running status
+ */
+bool is_duo_vio_tracker_running(void);
+
 /**
  * \brief Callback function for getting raw imgs
  * left img, right img, timestamp in seconds

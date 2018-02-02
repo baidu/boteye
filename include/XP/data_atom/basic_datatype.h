@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,9 +15,10 @@
  *****************************************************************************/
 #ifndef XP_INCLUDE_XP_DATA_ATOM_BASIC_DATATYPE_H_
 #define XP_INCLUDE_XP_DATA_ATOM_BASIC_DATATYPE_H_
-
+#include <driver/basic_datatype.h>
 #include <Eigen/Core>
 #include <vector>
+
 
 namespace XP {
 
@@ -26,7 +27,18 @@ struct ImuData {
   float time_stamp;
   Eigen::Vector3f accel;
   Eigen::Vector3f ang_v;
+  ImuData() {}
+  explicit ImuData(XPDRIVER::ImuData imu_data_simple) {
+    time_stamp = imu_data_simple.time_stamp;
+    accel[0] = imu_data_simple.accel[0];
+    accel[1] = imu_data_simple.accel[1];
+    accel[2] = imu_data_simple.accel[2];
+    ang_v[0] = imu_data_simple.ang_v[0];
+    ang_v[1] = imu_data_simple.ang_v[1];
+    ang_v[2] = imu_data_simple.ang_v[2];
+  }
 };
+
 
 struct PoseAndTime {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW

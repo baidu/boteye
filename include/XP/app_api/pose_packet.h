@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -68,6 +68,7 @@ struct ServerPktV1 {
 };
 
 
+// TODO(mingyu): Add UDP signatures for GuideMessage and ServerPktV1
 // distance [meter]
 // degree [-180 to 180 degree]
 // With Z:up

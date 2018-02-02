@@ -14,13 +14,13 @@
  * limitations under the License.
  *****************************************************************************/
 
-#ifndef XP_HELPER_TIMER_H
-#define XP_HELPER_TIMER_H
+#ifndef INCLUDE_DRIVER_HELPER_TIMER_H_
+#define INCLUDE_DRIVER_HELPER_TIMER_H_
 
 #include <chrono>
 #include <string>
 
-namespace XP {
+namespace XPDRIVER {
 // Create a scoped timer. Result will be printed to vlog
 class ScopedMicrosecondTimer {
  public:
@@ -35,10 +35,10 @@ class ScopedMicrosecondTimer {
 // Create a scoped timer.
 // The construction time and the deconstruction timestamp will be logged
 class ScopedLoopProfilingTimer {
-public:
+ public:
   explicit ScopedLoopProfilingTimer(const std::string& text_id, int vlog_level);
   ~ScopedLoopProfilingTimer();
-private:
+ private:
   const std::string text_id_;
   const int vlog_level_;
   std::chrono::time_point<std::chrono::steady_clock> t_start_;
@@ -58,5 +58,5 @@ class MicrosecondTimer {
   std::chrono::time_point<std::chrono::steady_clock> t_start_;
 };
 
-}  // namespace XP
-#endif  // XP_HELPER_TIMER_H
+}  // namespace XPDRIVER
+#endif  // INCLUDE_DRIVER_HELPER_TIMER_H_

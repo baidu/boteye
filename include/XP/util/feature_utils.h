@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,8 +24,17 @@
 #include <mutex>
 #include <random>
 #include <vector>
+#include <unordered_map>
+#include <utility>
 
 namespace XP {
+
+// this typedef shows up twice, seems like nothing bad happens.
+// try this
+#ifndef XP_TYPEDEF_FRAME_WITH_FEATURE_LIST_
+#define XP_TYPEDEF_FRAME_WITH_FEATURE_LIST_
+typedef std::pair<std::vector<cv::KeyPoint>, cv::Mat> FrameWithFeatureList;
+#endif
 
 class IdGenerator {
  public:
@@ -52,6 +61,11 @@ class FeatureTrackDetector {
     int length;
     bool isActive;
     cv::Point2f point;
+    std::vector<int> keyframes_id;  // keyframes included in this feature track.
+    // descriptor. 32 is for ORB. maybe we don't need this,
+    // since descriptors are stored in FrameWithFeatureList struct
+    // in the covisgraph.
+    uint8_t desc_[32];
   };
 
   FeatureTrackDetector(const int length_thres,
@@ -59,6 +73,8 @@ class FeatureTrackDetector {
                        const bool use_fast,  // True: fast; False: ShiTomasi
                        const int uniform_radius,  // <= 5 means no uniformity suppression
                        const cv::Size& img_size);
+  // flag keep_dead_feat_tracks is set to false as default,
+  // so that present calls to optical_flow_and_detect() won't fail if it's not given
   bool optical_flow_and_detect(const cv::Mat_<uchar>& mask,
                                const cv::Mat& pre_image_orb_feature,
                                const std::vector<cv::KeyPoint>& prev_img_kpts,
@@ -74,7 +90,43 @@ class FeatureTrackDetector {
                                const cv::Matx33f* K_ptr = nullptr,
                                const cv::Mat_<float>* dist_ptr = nullptr,
                                const cv::Matx33f* old_R_new_ptr = nullptr,
-                               const bool absolute_static = false);
+                               const bool absolute_static = false,
+                               const bool keep_dead_feat_tracks = false);
+  // This function is exclusively for re_detect decision and operation.
+  // Supposed to be called after the initial OF feature propagation from last frame,
+  // and the hybrid feature propagation from related key frames, consecutively.
+  // Key_pnts_ptr and orb_feat_ptr are input/output parameters,
+  // which are updated by the function.
+  // flag keep_dead_feat_tracks is to control whether to keep dead feature tracks
+  // after each propagation.
+  bool re_detect(const cv::Mat& img_in_smooth,
+                 int request_feat_num,
+                 int pyra_level_det,
+                 int fast_thresh,
+                 const cv::Mat& orb_feat_from_prop,
+                 std::vector<cv::KeyPoint>* key_pnts_ptr,
+                 cv::Mat* orb_feat_ptr,
+                 const bool keep_dead_feat_tracks = false);
+  int find_candidate_keyframes(const XP::FrameWithFeatureList&,
+                               std::unordered_map<int, int>* keyframe_hitlist);
+  bool hybrid_match(const cv::Mat& img_in_smooth,
+                    const cv::Mat& keyframe_smooth,
+                    std::vector<cv::KeyPoint>* key_pnts_ptr,
+                    cv::Mat* orb_feat_ptr,
+                    const std::vector<cv::KeyPoint>& key_pnts_all,
+                    const cv::Mat& orb_feat_all,
+                    const XP::FrameWithFeatureList&,
+                    const XP::FrameWithFeatureList&,
+                    const cv::Matx33f* K_ptr,
+                    const cv::Mat_<float>* dist_ptr,
+                    const int keyframe_id,
+                    const int current_id,
+                    int* weight,
+                    int max_dist_epi,
+                    int method_f,
+                    const std::vector<int>& debug_frames,
+                    std::vector<int>* outlier_ids = nullptr);
+
   void update_img_pyramids() {
     curr_img_pyramids_.swap(prev_img_pyramids_);
     curr_pyramids_buffer_.swap(prev_pyramids_buffer_);
@@ -86,6 +138,15 @@ class FeatureTrackDetector {
               int fast_thresh,
               std::vector<cv::KeyPoint>* key_pnts_ptr,
               cv::Mat* orb_feat_ptr);
+  bool detect_and_match(const cv::Mat& img_in_smooth,
+                        const cv::Mat_<uchar>& mask,
+                        int request_feat_num,
+                        const cv::Mat& pre_image_orb_feature,
+                        const std::vector<cv::KeyPoint>& pre_image_kpts,
+                        int pyra_level,  // Total pyramid levels, including the base image
+                        int fast_thresh,
+                        std::vector<cv::KeyPoint>* key_pnts_ptr,
+                        cv::Mat* orb_feat_ptr);
 
   inline size_t feature_tracks_number() const { return feature_tracks_map_.size(); }
   int add_new_feature_track(const cv::Point2f pt);  // Return the added feature track id
@@ -93,6 +154,12 @@ class FeatureTrackDetector {
   void filter_static_features(std::vector<cv::KeyPoint>* key_pnts);
   void update_feature_tracks(std::vector<cv::KeyPoint>* key_pnts);
   void flush_feature_tracks(const std::vector<cv::KeyPoint>& key_pnts);
+  inline std::vector<std::pair<int, int> > get_id_to_org_id_vec() const {
+    return id_to_org_id_vec_;
+  }
+  // Add current keyframe id (and descriptor?) to active feature tracks
+  // maybe we don't need to update descriptor for now
+  void update_featuretrack_history(const int keyframe_id);
 
  protected:
   // Once feature track exceeds this threshold, we break this feature track randomly
@@ -110,6 +177,10 @@ class FeatureTrackDetector {
 
   // A mask to hold the mask of the union of input mask and optical flow feats mask
   cv::Mat_<uchar> mask_with_of_out_;
+
+  // A vector of <class_id, original_class_id> pair for feature tracks that are randomly
+  // selected to be dropped during update_feature_tracks process
+  std::vector<std::pair<int, int> > id_to_org_id_vec_;
 
  private:
   // Random generator
@@ -143,6 +214,9 @@ class FeatureTrackDetector {
     BUILD_TO_PREV = 1
   };
   void build_img_pyramids(const cv::Mat& img_in_smooth, int build_type = BUILD_TO_CURR);
+  void set_mask_with_of_out(const cv::Mat_<uchar>& mask_with_of_out) {
+    mask_with_of_out_ = mask_with_of_out.clone();
+  }
 };
 
 // detect features on slave img

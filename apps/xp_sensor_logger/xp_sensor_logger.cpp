@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,8 +21,8 @@
 #include <XP/helper/timer.h>
 #include <XP/helper/param.h>
 #include <XP/helper/tag_detector.h>
-#include <XP/driver/xp_aec_table.h>
-#include <XP/driver/XP_sensor_driver.h>
+#include <driver/xp_aec_table.h>
+#include <driver/XP_sensor_driver.h>
 #include <XP/util/calibration_utils.h>
 #include <XP/util/depth_utils.h>
 #include <XP/util/feature_utils.h>
@@ -50,7 +50,7 @@
 using std::cout;
 using std::endl;
 using std::vector;
-using XP_DRIVER::XpSensorMultithread;
+using XPDRIVER::XpSensorMultithread;
 using std::chrono::steady_clock;
 DEFINE_bool(auto_gain, false, "turn on auto gain");
 DEFINE_bool(auto_wb, true, "Whether or not enable auto white balance");
@@ -64,7 +64,7 @@ DEFINE_bool(horizontal_line, false, "show green horizontal lines for disparity c
 DEFINE_bool(imu_from_image, false, "Load imu from image. Helpful for USB2.0");
 DEFINE_bool(orb_verify, false, "Use ORB feature matching to verify calib result");
 DEFINE_bool(save_image_bin, false, "Do not save image bin file");
-DEFINE_string(sensor_type, "XP", "LI or XP or XP2 or XP3 or FACE or XPIRL");
+DEFINE_string(sensor_type, "XP", "LI or XP or XP2 or XP3 or FACE or XPIRL or XPIRL2");
 DEFINE_bool(show_hist, false, "Show image histogram (left and right)");
 DEFINE_bool(spacebar_mode, false, "only save img when press space bar");
 DEFINE_string(record_path, "", "path to save images. Set empty to disable saving");
@@ -97,7 +97,7 @@ struct StereoImage {
   float ts_100us;
 };
 
-XP::shared_queue<XP::ImuData> imu_data_queue;
+XP::shared_queue<XPDRIVER::ImuData> imu_data_queue;
 XP::shared_queue<ImgForSave> imgs_for_saving_queue;
 XP::shared_queue<StereoImage> stereo_image_queue;
 std::atomic<bool> run_flag;
@@ -109,7 +109,7 @@ int g_aec_index;  // signed int as the index may go to negative while calculatio
 int g_infrared_index;
 cv::Size g_img_size;
 // The unique instance of XpSensorMultithread
-std::unique_ptr<XP_DRIVER::XpSensorMultithread> g_xp_sensor_ptr;
+std::unique_ptr<XPDRIVER::XpSensorMultithread> g_xp_sensor_ptr;
 XP::AprilTagDetector g_ap_detector;
 cv::BFMatcher g_orb_matcher(cv::NORM_HAMMING);
 
@@ -125,7 +125,7 @@ void image_data_callback(const cv::Mat& img_l, const cv::Mat& img_r, const float
   }
 }
 
-void imu_data_callback(const XP::ImuData& imu_data) {
+void imu_data_callback(const XPDRIVER::ImuData& imu_data) {
   if (run_flag) {
     imu_data_queue.push_back(imu_data);
   }
@@ -441,7 +441,7 @@ bool process_infrared_pwm(char keypressed) {
   if (g_xp_sensor_ptr == nullptr) {
     return false;
   }
-  using XP_DRIVER::XP_SENSOR::infrared_pwm_max;
+  using XPDRIVER::XP_SENSOR::infrared_pwm_max;
   if (g_auto_infrared && keypressed != -1) {  // -1 means no key is pressed
     switch (keypressed) {
       case '6':
@@ -485,6 +485,7 @@ bool process_infrared_pwm(char keypressed) {
     }
   }
   // only XPIRL support infrared light
+  // TODO(zhoury) XPIRL2 has not support infrared light
   if (FLAGS_sensor_type == "XPIRL" && (keypressed == 'i' || keypressed == 'I')) {
     g_auto_infrared = !g_auto_infrared;
     std::cout << "set infrared mode:" << ((g_auto_infrared == true) ? "on" : "off") << std::endl;
@@ -502,7 +503,7 @@ bool process_gain_control(char keypressed) {
   if (g_xp_sensor_ptr == nullptr) {
     return false;
   }
-  using XP_DRIVER::XP_SENSOR::kAEC_steps;
+  using XPDRIVER::XP_SENSOR::kAEC_steps;
   if (!g_auto_gain && keypressed != -1) {  // -1 means no key is pressed
     switch (keypressed) {
       case '1':
@@ -642,8 +643,6 @@ void thread_proc_img() {
       LOG(INFO) << "Generate cam " << lr << " mask (fov: " << fov_deg << " deg)";
     }
   }
-  // default setting is: auto white balance, auto keep luminance.
-  XP::AutoWhiteBalance whiteBalanceCorrector;
 
   size_t frame_counter = 0;
   std::chrono::time_point<steady_clock> pre_proc_time = steady_clock::now();
@@ -679,7 +678,9 @@ void thread_proc_img() {
       const int ms = std::chrono::duration_cast<std::chrono::milliseconds>(
           steady_clock::now() - pre_proc_time).count();
       pre_proc_time = steady_clock::now();
-      thread_proc_img_rate = 10 * 1000  / ms;
+      if (ms > 0) {
+        thread_proc_img_rate = 10 * 1000  / ms;
+      }
     }
 
     // Get the mono/color image Mats properly
@@ -940,7 +941,7 @@ void thread_write_imu_data() {
     }
   }
   while (run_flag) {
-    XP::ImuData imu_data;
+    XPDRIVER::ImuData imu_data;
     if (!imu_data_queue.wait_and_pop_front(&imu_data)) {
       break;
     }
@@ -1065,13 +1066,6 @@ int main(int argc, char** argv) {
   g_auto_infrared = false;
   g_aec_index = 120;
   g_infrared_index = 125;
-  // default param. Will be changed if calib yaml file is provided
-  g_img_size.width = XpSensorMultithread::kSensorColNum;
-  g_img_size.height = XpSensorMultithread::kSensorRowNum;
-  if (FLAGS_sensor_type == "FACE") {
-    g_img_size.height = XpSensorMultithread::kSensorColNum;
-    g_img_size.width = XpSensorMultithread::kSensorRowNum;
-  }
 
   // TODO(mingyu): Restore the support for XP3s?
   if (FLAGS_sensor_type == "LI"
@@ -1079,6 +1073,7 @@ int main(int argc, char** argv) {
       || FLAGS_sensor_type == "XP2"
       || FLAGS_sensor_type == "XP3"
       || FLAGS_sensor_type == "XPIRL"
+      || FLAGS_sensor_type == "XPIRL2"
       || FLAGS_sensor_type == "FACE") {
     g_xp_sensor_ptr.reset(new XpSensorMultithread(FLAGS_sensor_type,
                                                   g_auto_gain,
@@ -1090,11 +1085,21 @@ int main(int argc, char** argv) {
       LOG(ERROR) << "XpSensorMultithread failed to init";
       return -1;
     }
+    uint16_t width, height;
+    // default param. Will be changed if calib yaml file is provided
+    if (!(g_xp_sensor_ptr->get_sensor_resolution(&width, &height)))
+      return -1;
+    g_img_size.width = width;
+    g_img_size.height = height;
+    // FACE is a special XP3
+    if (FLAGS_sensor_type == "FACE") {
+      g_img_size.height = width;
+      g_img_size.width = height;
+    }
   } else {
     LOG(ERROR) << "sensor_type " << FLAGS_sensor_type << " not supported";
     return -1;
   }
-
   // Prepare the thread pool to handle the data from XpSensorMultithread
   vector<std::thread> thread_pool;
   thread_pool.push_back(std::thread(thread_proc_img));
@@ -1102,13 +1107,11 @@ int main(int argc, char** argv) {
   if (!FLAGS_record_path.empty()) {
     thread_pool.push_back(std::thread(thread_save_img));
   }
-
   // Register callback functions and let XpSensorMultithread spin
   CHECK(g_xp_sensor_ptr);
   g_xp_sensor_ptr->set_image_data_callback(image_data_callback);
   g_xp_sensor_ptr->set_imu_data_callback(imu_data_callback);
   g_xp_sensor_ptr->run();
-
   for (auto& t : thread_pool) {
     t.join();
   }

@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 // XP API
 #include <XP/app_api/xp_tracker.h>
 #include <XP/app_api/pose_packet.h>
+#include <XP/helper/serial-lib.h>
 // Parsing flags and logging
 #include <gflags/gflags.h>
 #include <glog/logging.h>
@@ -169,12 +170,19 @@ DEFINE_string(guide_ip, "", "the ip that the UDP guide message is sent to. e.g. 
  * These flags only take effect when path_follower walk is enabled.
  */
 DEFINE_int32(guide_port, -1, "the port that the UDP guide message is sent to. -1 ignore");
+/** \brief The serial port device that the tracking app will send guide message to.
+ *
+ * This flag only takes effect when path_follower walk is enabled.
+ *
+ */
+DEFINE_string(guide_serial_dev, "",
+              "the serial port device the guide message is sent to, e.g. /dev/ttyUSB0");
 /** \brief Use which type of sensor
  *
  * LI: LI sensor
- * XP: XP sensor
+ * XP, XP2, XP3: XP, XP2, XP3 sensor
  */
-DEFINE_string(sensor_type, "XP", "LI, XP, XP2, XP3");
+DEFINE_string(sensor_type, "XP", "LI, XP, XP2, XP3, XPIRL");
 /** \brief Where does the video sensor open
  *
  */
@@ -214,6 +222,14 @@ DEFINE_int32(display_img_w, 640, "the width of the window for displaying");
  * Not pull imu from image and use ioctl
  */
 DEFINE_bool(imu_from_image, false, "Do not load imu from image");
+
+DEFINE_string(navigation_folder, "",
+  "Folder containing the necessary files for navigation. "
+  "waypoints_file ${NAVIGATION_PATH}/waypoints.csv "
+  "map_occupancy_file ${NAVIGATION_PATH}/map_occupancy.png "
+  "map_occupancy_specs_file ${NAVIGATION_PATH}/map_occupancy.yml "
+  "waypoint_graph_output ${NAVIGATION_PATH}/waypoints_graph.txt "
+  "generated_trajectory_file ${NAVIGATION_PATH}/trajectory_planned.txt.");
 
 /** \brief Callback function for getting raw images
  *
@@ -354,37 +370,81 @@ void thread_apis() {
 /// \brief udp ip and port
 int g_udp_socket = -1;
 struct sockaddr_in g_udp_addr;
+bool init_guide_socket(const std::string& ip, const int port) {
+  g_udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
+  if (g_udp_socket < 0) {
+    LOG(ERROR) << "Could not create socket for PathFollwerWalk";
+    return false;
+  }
+  // Prepare the sockaddr_in structure
+  g_udp_addr.sin_family = AF_INET;
+  g_udp_addr.sin_addr.s_addr = inet_addr(ip.c_str());
+  g_udp_addr.sin_port = htons(port);
+  return true;
+}
+
+/// Serial port related code
+int g_serial_fd = 0;
+bool init_guide_serialport(const std::string& dev) {
+  constexpr int baudrate = 115200;
+  g_serial_fd = XP::serialport_init(dev.c_str(), baudrate);
+  if (g_serial_fd <= 0) {
+    LOG(ERROR) << dev << " cannot be initialized";
+    return false;
+  }
+  return true;
+}
+bool close_guide_serialport() {
+  if (g_serial_fd > 0) {
+    XP::serialport_close(g_serial_fd);
+    return true;
+  }
+  return false;
+}
+bool send_guide_serialport(const XP_TRACKER::GuideMessage& guide_message) {
+  // [NOTE] Customize the serial port message here!
+  // [NOTE] Tune the control velocity / angular velocity here!!
+  int16_t vel = static_cast<int16_t>(guide_message.vel);  // convert to mm/s
+  int16_t angv = static_cast<int16_t>(guide_message.angular_vel);  // convert to mrad/s
+  constexpr int kN = 9;
+  uint8_t buf[kN];
+  buf[0] = 0x0B;  // header 0
+  buf[1] = 0x0D;  // header 1
+  buf[2] = 5;     // payload length
+  buf[3] = 0x01;  // uid
+  buf[4] = vel & 0xff;          // velocity force little endian
+  buf[5] = (vel >> 8) & 0xff;
+  buf[6] = angv & 0xff;  // angv force little endian
+  buf[7] = (angv >> 8) & 0xff;
+  int chks = 0;
+  for (int i = 0; i < kN - 1; ++i) {
+    chks += buf[i];
+  }
+  buf[kN - 1] = (-chks) & 0xff;
+  if (XP::serialport_write_n(g_serial_fd, buf, kN) != 0)
+    return false;
+  return true;
+}
+
 /** \brief Callback function for getting walk guide information
  *
- * The information will be sent to UDP port
+ * The information will be sent to UDP port and/or serial port via USB
  * \param guide_message The guide message produced by SDK
  */
 void path_follower_walk_callback(const XP_TRACKER::GuideMessage& guide_message) {
-  if (FLAGS_guide_ip.empty() || FLAGS_guide_port < 0) {
-    // If path follower is enabled but no udp ip and port is set,
-    // print info here and return
-    std::cout << "guide msg: " << guide_message.status << std::endl;
-    return;
-  }
-  if (g_udp_socket < 0) {
-    // init
-    g_udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
-    if (g_udp_socket < 0) {
-      LOG(ERROR) << "Could not create socket for PathFollwerWalk";
-      return;
+  if (g_udp_socket >= 0) {
+    if (sendto(g_udp_socket, &guide_message, sizeof(guide_message), 0,
+               (struct sockaddr *)&g_udp_addr, sizeof(g_udp_addr)) < 0) {
+      LOG(ERROR) << "sendto() failed -> " << FLAGS_guide_ip << ":" << FLAGS_guide_port;
     }
-    // Prepare the sockaddr_in structure
-    g_udp_addr.sin_family = AF_INET;
-    g_udp_addr.sin_addr.s_addr = inet_addr(FLAGS_guide_ip.c_str());
-    g_udp_addr.sin_port = htons(FLAGS_guide_port);
   }
-
-  if (sendto(g_udp_socket, &guide_message, sizeof(guide_message), 0,
-             (struct sockaddr *)&g_udp_addr, sizeof(g_udp_addr)) < 0) {
-    LOG(ERROR) << "sendto() failed -> " << FLAGS_guide_ip << ":" << FLAGS_guide_port;
-    return;
+  if (g_serial_fd > 0) {
+    if (!send_guide_serialport(guide_message)) {
+      LOG(ERROR) << "send_guide_serialport failed via " << FLAGS_guide_serial_dev;
+    }
   }
 }
+
 /** \brief  Main function
  * \param  argc An integer argument count of the command line arguments
  * \param  argv An argument vector of the command line arguments
@@ -481,10 +541,23 @@ int main(int argc, char **argv) {
       if (FLAGS_path_follower == "robot") {
         is_path_follower_set = XP_TRACKER::set_path_follower_robot();
       } else if (FLAGS_path_follower == "walk") {
+        if (!FLAGS_guide_serial_dev.empty()) {
+          if (!init_guide_serialport(FLAGS_guide_serial_dev)) {
+            return -1;
+          }
+        }
+        if (!FLAGS_guide_ip.empty() && FLAGS_guide_port >= 0) {
+          if (!init_guide_socket(FLAGS_guide_ip, FLAGS_guide_port)) {
+            return -1;
+          }
+        }
         is_path_follower_set = XP_TRACKER::set_path_follower_walk(path_follower_walk_callback);
       } else {
         LOG(ERROR) << "Not supported path follower type: " << FLAGS_path_follower;
         return -1;
+      }
+      if (!FLAGS_navigation_folder.empty()) {
+        XP_TRACKER::set_generated_trajectory_file(FLAGS_navigation_folder);
       }
       if (!is_path_follower_set) {
         LOG(ERROR) << "set path follower: " << FLAGS_path_follower << " failed";
@@ -779,7 +852,7 @@ int main(int argc, char **argv) {
             std::thread(thread_apis).detach();
           }
 #endif
-        } else if (key_pressed == -1) {
+        } else if (key_pressed == static_cast<char>(-1)) {
           // nothing is pressed
         } else {
           LOG(ERROR) << "Key " << static_cast<int32_t>(key_pressed)
@@ -800,14 +873,20 @@ int main(int argc, char **argv) {
         }
       }
 #endif
+      if (!XP_TRACKER::is_duo_vio_tracker_running()) {
+        std::cout << "duo_vio_tracker stops running." << std::endl;
+        break;
+      }
     }
   }
 
   // Save the final mapper trajectory before exit
-  if (FLAGS_record_path.empty()) {
-    cv::imwrite("/tmp/final_traj.png", top_down_view_canvas);
-  } else {
-    cv::imwrite(FLAGS_record_path + "/final_traj.png", top_down_view_canvas);
+  if (!FLAGS_no_display) {
+    if (FLAGS_record_path.empty()) {
+      cv::imwrite("/tmp/final_traj.png", top_down_view_canvas);
+    } else {
+      cv::imwrite(FLAGS_record_path + "/final_traj.png", top_down_view_canvas);
+    }
   }
 
   if (!FLAGS_pb_save.empty()) {
@@ -817,6 +896,9 @@ int main(int argc, char **argv) {
   }
 
   XP_TRACKER::stop_tracker();
+  if (g_serial_fd > 0) {
+    close_guide_serialport();
+  }
 
   // Linux crashes at the end if release is not explicitly called
   g_img_l_ptr->release();
