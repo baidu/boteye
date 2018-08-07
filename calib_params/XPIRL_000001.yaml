@@ -1,5 +1,5 @@
-DeviceId: ""
-SensorType: UNKNOWN
+DeviceId: "XPIRL_000001"
+SensorType: XPIRL
 Imu:
   accel_TK:
     - [1, 0, 0]

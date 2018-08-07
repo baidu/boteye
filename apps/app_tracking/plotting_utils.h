@@ -32,36 +32,7 @@
 #include <algorithm>
 #include <mutex>
 #include <memory>  // unique_ptr
-class PoseDrawer2D {
- public:
-  constexpr static const int imageSize = 480;  // the same as camera image height
-  PoseDrawer2D();
-  /**
-   * Add a new pose for drawing
-   */
-  void addPose(float x, float y, float alpha);
-  /** Drawing function called by external thread
-   * Draw all the positions in history.
-   */
-  bool drawTo(cv::Mat* img_ptr);
 
- private:
-  cv::Point2f convertToImageCoordinates(const cv::Point2f & pointInMeters);
-  void drawPath(cv::Mat* img_ptr);
-  std::mutex data_io_mutex_;
-  std::list<cv::Point2f> paths_;
-  struct {
-    float x;
-    float y;
-    float alpha;
-  } latest_pose_;
-  std::atomic<float> scale_;
-  std::atomic<float> min_x_;
-  std::atomic<float> min_y_;
-  std::atomic<float> max_x_;
-  std::atomic<float> max_y_;
-  const float frameScale_ = 0.2;  // the scale of the axis in plot[m]
-};
 #ifdef HAS_OPENCV_VIZ
 class PoseDrawer3D {
  public:

@@ -1,0 +1,43 @@
+Actuator:
+  type: dilili  # dilili, reeman, eai, gyroor, sample, or any user-implemented actuator
+  serial_dev: /dev/ttyUSB0  # the serial port device of this actuator
+  reverse_heading: true
+  encoder_ticks_num: 8000  # ticks amount of encoder
+  axis_diameter: 0.4 # length of the axis between two wheels
+  wheel_diameter: 0.148  # (m)
+  ultrasound_flag: 0  # 1 A 2 B 4 C 8 D 16 E 32 F 64 G 128 H
+  device_radius: 0.4 # radius of the circumscribed circle of robot
+
+Navigation:
+  type: navi  # navi or robot or walk. (robot or walk are path follower based. To-be deprecated)
+  use_trajectory_file: false  # use ${navigation_folder}/trajectory.txt to generate trajectory automatically
+  use_global_occ_grid_prior: false  # use ${navigation_folder}/semantic_occupancy.png (if exists) as a priori occ grid in OA
+  mode: control  # control or loop.
+  wheel_odom_vel_feedback: true # use wheel odom velocity feedback to improve PD control
+  base_velocity: 0.3 # meter per second.  Only used by simple controller (to-be deprecated)
+  lost_recovery_timeout: 60 # timeout threshold in lost recovery status (s)
+  enable_obstacle_avoid: true # enable the latest obstacles circumvent strategy
+  grid_cell_size_x: 200 # local grid size in X dimension
+  grid_cell_size_y: 200 # local grid size in Y dimension
+  grid_resolution: 0.05 # local grid resolution (m)
+  hierarchical_infalte: true # use multiple inflate radius: 1.2, 1.1, 1.0, 0.9 times of device radius
+  safe_obstacle_distance: 0.7 # obstacle closer than the value will trigger obstacle avoid (m)
+  valid_obstacle_dist_range: 2.0 # use obstacles closer than this distance as input of navigation logic (m)
+  valid_obstacle_angle_range: 1.309 # use obstacles in this horizontal angle range as input of navigation logic (rad)
+  virtual_clear_range: 3.0 # Used to clear obstacles when no obstacle is detected on a ray
+  road_width: 3.0 # the valid width of road for local path search in obstacles circumvent mode (m)
+  control_frequency: 20  # the frequency to update and control actuator (hz)
+
+Controller:
+  type: PD  # Navigator only supports PD for now
+  track_distance: 0.4 # distance between current position and local target.
+  target_distance_tolerance: 0.1 # distance error tolerance when reach target (m)
+  target_direction_tolerance: 0.087 # direction error tolerance when reach target (rad)
+  inter_sample_resolution: 0.01 # sample resolution between two local target candidates
+  v_max: 0.6 # 0.4 max linear velocity (m/s)
+  abs_w_max: 0.8 # max absolute value of angular velocity (rad/s)
+  kp_v: 1.5 # 0.75 P param of linear velocity
+  kp_w: 0.8 # 0.51 P param of angular velocity
+  kp_acc_v: 0.5 # P param of linear acceleration
+  kp_acc_v_stop: 0.25 # P param of linear acceleration in stop motion
+  kp_acc_w: 0.5 # P param of angular acceleration

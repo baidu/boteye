@@ -19,6 +19,8 @@
 #include <glog/logging.h>
 #include <deque>
 #include <mutex>
+#include <string>
+#include <vector>
 #include <condition_variable>
 
 namespace XP {
@@ -54,11 +56,11 @@ class shared_queue {
   shared_queue& operator=(const shared_queue&) = delete;
   shared_queue(const shared_queue& other) = delete;
 
-  shared_queue() : kill_(false) {}
+  explicit shared_queue(const std::string& name) : name_(name), kill_(false) {}
   ~shared_queue() {
     // make sure you always call kill before destruction
     if (!kill_ && !queue_.empty()) {
-      LOG(ERROR) << "shared_queue is destructed without getting killed";
+      LOG(ERROR) << "shared_queue : " << name_ << " is destructed without getting killed";
     }
   }
 
@@ -66,7 +68,15 @@ class shared_queue {
   // to prevent potential deadlock.
   void kill() {
     kill_ = true;
-    cond_.notify_one();
+    cond_.notify_all();  // Notify all for all potential subscribers to stop waiting
+  }
+
+  // Use this function to "re-initialize" the shared queue
+  void reinit() {
+    if (kill_) {
+      kill_ = false;
+      this->clear();
+    }
   }
 
   T front() {
@@ -78,6 +88,19 @@ class shared_queue {
     {
       std::lock_guard<std::mutex> lock(m_);
       queue_.push_back(std::move(elem));
+    }
+    // Unlock mutex m_ before notifying
+    cond_.notify_one();
+  }
+
+  // queue_ will push_back this elem and then pop_front until the cap_num is met.
+  void push_back_with_cap(T elem, size_t cap_num) {
+    {
+      std::lock_guard<std::mutex> lock(m_);
+      queue_.push_back(std::move(elem));
+      while (queue_.size() > cap_num) {
+        queue_.pop_front();
+      }
     }
     // Unlock mutex m_ before notifying
     cond_.notify_one();
@@ -118,6 +141,18 @@ class shared_queue {
     }
   }
 
+  bool wait_and_pop_all(std::vector<T>* elem_vec) {
+    std::unique_lock<std::mutex> lock(m_);
+    cond_.wait(lock, [this](){ return !queue_.empty() || kill_; });
+    if (kill_) {
+      return false;
+    } else {
+      elem_vec->assign(queue_.begin(), queue_.end());
+      queue_.clear();
+      return true;
+    }
+  }
+
   bool wait_and_peek_front(T* elem) {
     std::unique_lock<std::mutex> lock(m_);
     cond_.wait(lock, [this](){ return !queue_.empty() || kill_; });
@@ -148,6 +183,7 @@ class shared_queue {
   Container queue_;
   std::mutex m_;
   std::condition_variable cond_;
+  std::string name_;
   bool kill_;
 };
 }  // namespace XP

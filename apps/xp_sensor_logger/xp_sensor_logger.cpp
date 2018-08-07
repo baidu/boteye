@@ -22,9 +22,10 @@
 #include <XP/helper/param.h>
 #include <XP/helper/tag_detector.h>
 #include <driver/xp_aec_table.h>
+#include <driver/AR0141_aec_table.h>
 #include <driver/XP_sensor_driver.h>
 #include <XP/util/calibration_utils.h>
-#include <XP/util/depth_utils.h>
+#include <XP/depth/depth_utils.h>
 #include <XP/util/feature_utils.h>
 #include <XP/util/image_utils.h>
 #include <opencv2/highgui.hpp>
@@ -46,25 +47,30 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <mutex>
 #include <memory>
 using std::cout;
 using std::endl;
 using std::vector;
 using XPDRIVER::XpSensorMultithread;
 using std::chrono::steady_clock;
+using XPDRIVER::SensorType;
 DEFINE_bool(auto_gain, false, "turn on auto gain");
-DEFINE_bool(auto_wb, true, "Whether or not enable auto white balance");
+DEFINE_string(wb_mode, "preset", "white balance mode: auto, disabled, preset");
 DEFINE_bool(calib_mode, false, "whether or not to show point distribution");
 DEFINE_bool(calib_verify, false, "Use april tag board to verify calib result");
 DEFINE_string(calib_yaml, "", "load calib file");
+DEFINE_string(ir_calib_yaml, "", "load IR calib file");
+DEFINE_string(depth_param_yaml, "", "load depth config file");
 DEFINE_bool(depth, false, "whether or not show depth image");
-DEFINE_string(dev_id, "", "which dev to open. Empty enables auto mode");
+DEFINE_bool(ir_depth, false, "whether or not show ir depth image");
+DEFINE_string(dev_name, "", "which dev to open. Empty enables auto mode");
 DEFINE_bool(headless, false, "Do not show windows");
 DEFINE_bool(horizontal_line, false, "show green horizontal lines for disparity check");
 DEFINE_bool(imu_from_image, false, "Load imu from image. Helpful for USB2.0");
 DEFINE_bool(orb_verify, false, "Use ORB feature matching to verify calib result");
 DEFINE_bool(save_image_bin, false, "Do not save image bin file");
-DEFINE_string(sensor_type, "XP", "LI or XP or XP2 or XP3 or FACE or XPIRL or XPIRL2");
+DEFINE_string(sensor_type, "", "XP or XP2 or XP3 or FACE or XPIRL or XPIRL2, XPIRL3");
 DEFINE_bool(show_hist, false, "Show image histogram (left and right)");
 DEFINE_bool(spacebar_mode, false, "only save img when press space bar");
 DEFINE_string(record_path, "", "path to save images. Set empty to disable saving");
@@ -73,7 +79,8 @@ DEFINE_int32(valid_radius, 360,
              "Suggested value: 360 for 120 deg FOV and 220 for 170 deg FOV.");
 DEFINE_bool(verbose, false, "whether or not log more info");
 DEFINE_bool(viz3d, false, "whether or not to turn on point cloud");
-
+DEFINE_int32(ir_period, 2, "One IR image in every ir_period frames. 0: all RGBs, 1: all IRs,"
+            " 2: RGB-IR, 3: RGB-RGB-IR");
 #ifdef __ARM_NEON__
 DEFINE_int32(cpu_core, 4, "bind program to run on specific core[0 ~ 7],"
              "being out-of-range indicates no binding, only valid on ARM platform");
@@ -96,15 +103,23 @@ struct StereoImage {
   cv::Mat r;
   float ts_100us;
 };
-
-XP::shared_queue<XPDRIVER::ImuData> imu_data_queue;
-XP::shared_queue<ImgForSave> imgs_for_saving_queue;
-XP::shared_queue<StereoImage> stereo_image_queue;
+struct ImgForShow {
+  cv::Mat image;
+  std::string image_name;
+  std::mutex image_show_mutex;
+};
+XP::shared_queue<XPDRIVER::ImuData> imu_data_queue("imu_data_queue");
+XP::shared_queue<ImgForSave> imgs_for_saving_queue("imgs_for_saving_queue");
+XP::shared_queue<ImgForSave> IR_imgs_for_saving_queue("IR_imgs_for_saving_queue");
+XP::shared_queue<StereoImage> IR_depth_queue("IR_depth_queue");
+XP::shared_queue<StereoImage> stereo_image_queue("stereo_image_queue");
+XP::shared_queue<StereoImage> IR_image_queue("IR_image_queue");
 std::atomic<bool> run_flag;
-
+std::atomic<bool> save_img, save_ir_img;
+SensorType XP_sensor_type;
 // we use the first imu to approx img time based on img counter
 std::atomic<bool> g_auto_gain;
-std::atomic<bool> g_auto_infrared;
+XPDRIVER::XP_SENSOR::infrared_mode_t g_infrared_mode;
 int g_aec_index;  // signed int as the index may go to negative while calculation
 int g_infrared_index;
 cv::Size g_img_size;
@@ -112,10 +127,16 @@ cv::Size g_img_size;
 std::unique_ptr<XPDRIVER::XpSensorMultithread> g_xp_sensor_ptr;
 XP::AprilTagDetector g_ap_detector;
 cv::BFMatcher g_orb_matcher(cv::NORM_HAMMING);
+ImgForShow g_img_lr_display, g_img_lr_IR_display;
+ImgForShow g_depth_canvas;
+ImgForShow g_hist_canvas;
+vector<ImgForShow> g_visualize_img_lr(2);
 
+bool g_has_IR;
 // Callback functions for XpSensorMultithread
 // [NOTE] These callback functions have to be light-weight as it *WILL* block XpSensorMultithread
-void image_data_callback(const cv::Mat& img_l, const cv::Mat& img_r, const float ts_100us) {
+void image_data_callback(const cv::Mat& img_l, const cv::Mat& img_r, const float ts_100us,
+                         const std::chrono::time_point<std::chrono::steady_clock>& sys_time) {
   if (run_flag) {
     StereoImage stereo_img;
     stereo_img.l = img_l;
@@ -125,10 +146,35 @@ void image_data_callback(const cv::Mat& img_l, const cv::Mat& img_r, const float
   }
 }
 
+void IR_data_callback(const cv::Mat& img_l, const cv::Mat& img_r, const float ts_100us,
+                      const std::chrono::time_point<std::chrono::steady_clock>& sys_time) {
+  if (run_flag) {
+    StereoImage IR_img;
+    IR_img.l = img_l;
+    IR_img.r = img_r;
+    IR_img.ts_100us = ts_100us;
+    IR_image_queue.push_back(IR_img);
+    if (FLAGS_ir_depth &&
+        (XP_sensor_type == SensorType::XPIRL2 || XP_sensor_type == SensorType::XPIRL3)) {
+      IR_depth_queue.push_back(IR_img);
+    }
+  }
+}
+
 void imu_data_callback(const XPDRIVER::ImuData& imu_data) {
   if (run_flag) {
     imu_data_queue.push_back(imu_data);
   }
+}
+
+void image_thread_safe_copy(ImgForShow* image_show, const cv::Mat& raw_image) {
+  std::lock_guard<std::mutex> lock(image_show->image_show_mutex);
+  raw_image.copyTo(image_show->image);
+}
+
+void image_thread_safe_show(ImgForShow* image_show) {
+  std::lock_guard<std::mutex> lock(image_show->image_show_mutex);
+  imshow(image_show->image_name, image_show->image);
 }
 
 // Utility functions
@@ -334,6 +380,87 @@ cv::Mat_<cv::Vec3f> g_depth_xyz_img;
 cv::Mat g_disparity_img;
 cv::Mat g_disparity_buf;  // for filterSpeckles
 vector<cv::Mat> g_disparity_ml;
+
+void visualize_depth(const XP::DuoCalibParam& calib_param,
+                     bool save_img,
+#ifdef HAS_OPENCV_VIZ
+                     cv::Mat* depth_canvas,
+                     cv::viz::Viz3d* viz_window) {
+#else
+                     cv::Mat* depth_canvas) {
+#endif  // HAS_OPENCV_VIZ
+
+  CHECK_EQ(g_disparity_img.type(), CV_16SC1);
+  CHECK_GT(g_disparity_img.rows, 0);
+  CHECK_GT(g_disparity_img.cols, 0);
+  // compute xyz img for display or saving
+  if (save_img
+#ifdef HAS_OPENCV_VIZ
+      || (FLAGS_viz3d && !FLAGS_headless)
+#endif
+      ) {
+    if (g_depth_xyz_img.rows == 0) {
+      g_depth_xyz_img.create(g_disparity_img.rows, g_disparity_img.cols);
+    }
+    g_depth_xyz_img.setTo(cv::Vec3f(0, 0, 0));
+    for (int y = 0; y < g_disparity_img.rows; ++y) {
+      for (int x = 0; x < g_disparity_img.cols; ++x) {
+        int16_t disp = g_disparity_img.at<int16_t>(y, x);
+        if (disp <= 0) continue;
+        // http://docs.opencv.org/3.0.0/d9/d0c/group__calib3d.html#ga1bc1152bd57d63bc524204f21fde6e02
+        // [XYZW]T=𝚀∗[x y 𝚍𝚒𝚜𝚙𝚊𝚛𝚒𝚝𝚢(x,y) 1]T
+        cv::Vec4f xyz_homo;
+        if (FLAGS_depth)
+          xyz_homo = calib_param.Camera.Q *
+                     cv::Vec4f(x, y, static_cast<float>(disp) / 16.f, 1);
+        cv::Vec3f xyz_C(xyz_homo[0] / xyz_homo[3],
+                        xyz_homo[1] / xyz_homo[3],
+                        xyz_homo[2] / xyz_homo[3]);
+        g_depth_xyz_img.at<cv::Vec3f>(y, x) = xyz_C;
+      }
+    }
+  }
+  if (!FLAGS_headless) {
+    for (int i = 0; i < g_disparity_img.rows; ++i) {
+      for (int j = 0; j < g_disparity_img.cols; ++j) {
+        depth_canvas->at<cv::Vec3b>(i, j) = XP::depth16S2color(g_disparity_img.at<int16_t>(i, j));
+      }
+    }
+
+#ifdef HAS_OPENCV_VIZ
+    // compute xyz
+    if (FLAGS_viz3d) {
+      // compute color based on Z val
+      cv::Mat_<cv::Vec3b> color(g_depth_xyz_img.size());
+      constexpr float far_cut = 1.f;
+      constexpr float near_cut = 0.2f;
+      for (int x = 0; x < g_depth_xyz_img.cols; ++x) {
+        for (int y = 0; y < g_depth_xyz_img.rows; ++y) {
+          const float z_val = g_depth_xyz_img(y, x)[2];
+          if (z_val > far_cut) {
+            g_depth_xyz_img.at<cv::Vec3f>(y, x) = cv::Vec3f(0, 0, 0);
+            color(y, x) = cv::Vec3b(0, 0xff, 0);
+          } else if (z_val < near_cut) {
+            g_depth_xyz_img.at<cv::Vec3f>(y, x) = cv::Vec3f(0, 0, 0);
+            color(y, x) = cv::Vec3b(0, 0, 0);
+          } else {
+            color(y, x)[2] =
+                    static_cast<uint8_t>(255 * (far_cut - z_val) / (far_cut - near_cut));
+            color(y, x)[1] =
+                    static_cast<uint8_t>(255 * (z_val - near_cut) / (far_cut - near_cut));
+            color(y, x)[0] = 0;
+          }
+        }
+      }
+      cv::viz::WCloud pnt_cloud(g_depth_xyz_img, color);
+      viz_window->showWidget("depth img", pnt_cloud);
+      // A long spin time to make sure the pnt clound is displayed
+      viz_window->spinOnce(5, false);
+    }
+#endif
+  }
+}
+
 void process_stereo_depth(const XP::DuoCalibParam& calib_param,
                           const cv::Mat& img_l_mono,
                           const cv::Mat& img_r_mono,
@@ -357,153 +484,150 @@ void process_stereo_depth(const XP::DuoCalibParam& calib_param,
                           0,
                           2,
                           &g_disparity_buf);
-  CHECK_EQ(g_disparity_img.type(), CV_16SC1);
-  CHECK_GT(g_disparity_img.rows, 0);
-  CHECK_GT(g_disparity_img.cols, 0);
-  // compute xyz img for display or saving
-  if (save_img
-#ifdef HAS_OPENCV_VIZ
-      || (FLAGS_viz3d && !FLAGS_headless)
-#endif
-      ) {
-    if (g_depth_xyz_img.rows == 0) {
-      g_depth_xyz_img.create(g_disparity_img.rows, g_disparity_img.cols);
-    }
-    g_depth_xyz_img.setTo(cv::Vec3f(0, 0, 0));
-    for (int y = 0; y < g_disparity_img.rows; ++y) {
-      for (int x = 0; x < g_disparity_img.cols; ++x) {
-        int16_t disp = g_disparity_img.at<int16_t>(y, x);
-        if (disp <= 0) continue;
-        // http://docs.opencv.org/3.0.0/d9/d0c/group__calib3d.html#ga1bc1152bd57d63bc524204f21fde6e02
-        // [XYZW]T=𝚀∗[x y 𝚍𝚒𝚜𝚙𝚊𝚛𝚒𝚝𝚢(x,y) 1]T
-        cv::Vec4f xyz_homo = calib_param.Camera.Q *
-            cv::Vec4f(x, y, static_cast<float>(disp) / 16.f, 1);
-        cv::Vec3f xyz_C(xyz_homo[0] / xyz_homo[3],
-                        xyz_homo[1] / xyz_homo[3],
-                        xyz_homo[2] / xyz_homo[3]);
-        g_depth_xyz_img.at<cv::Vec3f>(y, x) = xyz_C;
-      }
-    }
-  }
-  if (!FLAGS_headless) {
-    if (depth_canvas->rows == 0) {
-      depth_canvas->create(g_disparity_img.size(), CV_8UC3);
-    }
-    for (int i = 0; i < g_disparity_img.rows; ++i) {
-      for (int j = 0; j < g_disparity_img.cols; ++j) {
-        depth_canvas->at<cv::Vec3b>(i, j) = XP::depth16S2color(g_disparity_img.at<int16_t>(i, j));
-      }
-    }
-    imshow("depth_canvas", *depth_canvas);
+//  if (FLAGS_depth_param_yaml.empty()) {
+//    LOG(ERROR) << "You must set depth_param_yaml to provide some depth param";
+//  }
+//  XP::census_stereo(calib_param,
+//                    img_l_mono,
+//                    img_r_mono,
+//                    FLAGS_depth_param_yaml,
+//                    &g_disparity_img);
 
 #ifdef HAS_OPENCV_VIZ
-    // compute xyz
-    if (FLAGS_viz3d) {
-      // compute color based on Z val
-      cv::Mat_<cv::Vec3b> color(g_depth_xyz_img.size());
-      constexpr float far_cut = 1.f;
-      constexpr float near_cut = 0.2f;
-      for (int x = 0; x < g_depth_xyz_img.cols; ++x) {
-        for (int y = 0; y < g_depth_xyz_img.rows; ++y) {
-          const float z_val = g_depth_xyz_img(y, x)[2];
-          if (z_val > far_cut) {
-            g_depth_xyz_img.at<cv::Vec3f>(y, x) = cv::Vec3f(0, 0, 0);
-            color(y, x) = cv::Vec3b(0, 0xff, 0);
-          } else if (z_val < near_cut) {
-            g_depth_xyz_img.at<cv::Vec3f>(y, x) = cv::Vec3f(0, 0, 0);
-            color(y, x) = cv::Vec3b(0, 0, 0);
-          } else {
-            color(y, x)[2] =
-                static_cast<uint8_t>(255 * (far_cut - z_val) / (far_cut - near_cut));
-            color(y, x)[1] =
-                static_cast<uint8_t>(255 * (z_val - near_cut) / (far_cut - near_cut));
-            color(y, x)[0] = 0;
-          }
-        }
-      }
-      cv::viz::WCloud pnt_cloud(g_depth_xyz_img, color);
-      viz_window->showWidget("depth img", pnt_cloud);
-      // A long spin time to make sure the pnt clound is displayed
-      viz_window->spinOnce(5, false);
-    }
+    visualize_depth(calib_param, save_img, depth_canvas, viz_window);
+#else
+    visualize_depth(calib_param, save_img, depth_canvas);
 #endif
-  }
+}
+
+void process_stereo_ir_depth(const XP::DuoCalibParam& rgb_calib_param,
+                             const XP::DuoCalibParam& ir_calib_param,
+                             const cv::Mat& img_l_ir,
+                             const cv::Mat& img_r_ir,
+                             const cv::Mat& img_l_rgb,
+                             const bool save_img,
+#ifdef HAS_OPENCV_VIZ
+                             cv::Mat* depth_canvas,
+                             cv::viz::Viz3d* viz_window) {
+#else
+                             cv::Mat* depth_canvas) {
+#endif  // HAS_OPENCV_VIZ
+  // Sanity check
+  CHECK_EQ(img_l_rgb.channels(), 1);
+  CHECK_EQ(img_l_rgb.type(), CV_8U);
+  CHECK_EQ(img_l_ir.channels(), 1);
+  CHECK_EQ(img_r_ir.channels(), 1);
+  CHECK_EQ(img_l_ir.type(), CV_8U);
+  CHECK_EQ(img_r_ir.type(), CV_8U);
+
+  XP::ir_census_stereo(rgb_calib_param,
+                       ir_calib_param,
+                       img_l_ir,
+                       img_r_ir,
+                       img_l_rgb,
+                       FLAGS_depth_param_yaml,
+                       &g_disparity_img);
+
+#ifdef HAS_OPENCV_VIZ
+  visualize_depth(ir_calib_param, save_img, depth_canvas, viz_window);
+#else
+  visualize_depth(ir_calib_param, save_img, depth_canvas);
+#endif
 }
 
 bool kill_all_shared_queues() {
   imgs_for_saving_queue.kill();
+  IR_imgs_for_saving_queue.kill();
   stereo_image_queue.kill();
   imu_data_queue.kill();
+  IR_image_queue.kill();
+  if (FLAGS_ir_depth &&
+      (XP_sensor_type == SensorType::XPIRL2 || XP_sensor_type == SensorType::XPIRL3)) {
+    IR_depth_queue.kill();
+  }
   return true;
 }
 
-bool process_infrared_pwm(char keypressed) {
+bool process_ir_control(char keypressed) {
   if (g_xp_sensor_ptr == nullptr) {
     return false;
   }
   using XPDRIVER::XP_SENSOR::infrared_pwm_max;
-  if (g_auto_infrared && keypressed != -1) {  // -1 means no key is pressed
+// -1 means no key is pressed
+  if (g_infrared_mode != XPDRIVER::XP_SENSOR::OFF && keypressed != -1) {
+    int index_old = g_infrared_index;
     switch (keypressed) {
       case '6':
         g_infrared_index = 1;
-        g_xp_sensor_ptr->set_infrared_index(g_infrared_index);
         break;
       case '7':
         g_infrared_index = infrared_pwm_max * 0.2;
-        g_xp_sensor_ptr->set_infrared_index(g_infrared_index);
         break;
       case '8':
         g_infrared_index = infrared_pwm_max * 0.6;
-        g_xp_sensor_ptr->set_infrared_index(g_infrared_index);
         break;
       case '9':
         g_infrared_index = infrared_pwm_max - 10;
-        g_xp_sensor_ptr->set_infrared_index(g_infrared_index);
         break;
       case '.':
         ++g_infrared_index;
         if (g_infrared_index >= infrared_pwm_max) g_infrared_index = infrared_pwm_max -1;
-        g_xp_sensor_ptr->set_infrared_index(g_infrared_index);
         break;
       case '>':
         g_infrared_index += 5;
         if (g_infrared_index >= infrared_pwm_max) g_infrared_index = infrared_pwm_max -1;
-        g_xp_sensor_ptr->set_infrared_index(g_infrared_index);
         break;
       case ',':
         --g_infrared_index;
         if (g_infrared_index < 0) g_infrared_index = 0;
-        g_xp_sensor_ptr->set_infrared_index(g_infrared_index);
         break;
       case '<':
         g_infrared_index -= 5;
         if (g_infrared_index < 0) g_infrared_index = 0;
-        g_xp_sensor_ptr->set_infrared_index(g_infrared_index);
         break;
       default:
         break;
     }
+    if (index_old != g_infrared_index)
+      g_xp_sensor_ptr->set_infrared_param(g_infrared_mode, g_infrared_index, FLAGS_ir_period);
   }
-  // only XPIRL support infrared light
-  // TODO(zhoury) XPIRL2 has not support infrared light
-  if (FLAGS_sensor_type == "XPIRL" && (keypressed == 'i' || keypressed == 'I')) {
-    g_auto_infrared = !g_auto_infrared;
-    std::cout << "set infrared mode:" << ((g_auto_infrared == true) ? "on" : "off") << std::endl;
-    // TODO(zhourenyi): add auto pwm function
-    if (g_auto_infrared == false)
-      g_xp_sensor_ptr->set_infrared_index(0);
-    g_xp_sensor_ptr->set_auto_infrared(g_auto_infrared);
+  // By pressing "i" or "I", we circle around the following IR mode:
+  // OFF -> STRUCTURED -> INFRARED -> ALL_LIGHT -> OFF
+  if ((keypressed == 'i' || keypressed == 'I')) {
+    if (XP_sensor_type == SensorType::XPIRL2 || XP_sensor_type == SensorType::XPIRL3) {
+      if (g_infrared_mode == XPDRIVER::XP_SENSOR::OFF) {
+        g_infrared_mode = XPDRIVER::XP_SENSOR::STRUCTURED;
+        cv::namedWindow("img_lr_IR");
+        cv::moveWindow("img_lr_IR", 10, 10);
+      } else if (g_infrared_mode == XPDRIVER::XP_SENSOR::STRUCTURED) {
+        g_infrared_mode = XPDRIVER::XP_SENSOR::INFRARED;
+      } else if (g_infrared_mode == XPDRIVER::XP_SENSOR::INFRARED) {
+        g_infrared_mode = XPDRIVER::XP_SENSOR::ALL_LIGHT;
+      } else if (g_infrared_mode == XPDRIVER::XP_SENSOR::ALL_LIGHT) {
+        g_infrared_mode = XPDRIVER::XP_SENSOR::OFF;
+      } else {
+        g_infrared_mode = XPDRIVER::XP_SENSOR::OFF;
+      }
+      g_xp_sensor_ptr->set_infrared_param(g_infrared_mode, g_infrared_index, FLAGS_ir_period);
+      if (g_infrared_mode == XPDRIVER::XP_SENSOR::OFF) {
+        // close IR show window
+        cv::destroyWindow("img_lr_IR");
+      }
+    } else {
+      std::cout << "Only XPIRL2/3 support IR mode, Please check sensor type!"<< std::endl;
+    }
   }
   return true;
 }
 bool process_gain_control(char keypressed) {
-  if (FLAGS_sensor_type == "LI") {
-    return false;
-  }
   if (g_xp_sensor_ptr == nullptr) {
     return false;
   }
   using XPDRIVER::XP_SENSOR::kAEC_steps;
+  using XPDRIVER::XP_SENSOR::kAR0141_AEC_steps;
+  const bool is_ir_sensor = (XP_sensor_type == SensorType::XPIRL2 ||\
+                       XP_sensor_type == SensorType::XPIRL3);
+  uint32_t AEC_steps = (is_ir_sensor ? kAR0141_AEC_steps : kAEC_steps);
   if (!g_auto_gain && keypressed != -1) {  // -1 means no key is pressed
     switch (keypressed) {
       case '1':
@@ -513,28 +637,28 @@ bool process_gain_control(char keypressed) {
         break;
       case '2':
         // 20% of max brightness
-        g_aec_index = kAEC_steps * 0.2;
+        g_aec_index = AEC_steps * 0.2;
         g_xp_sensor_ptr->set_aec_index(g_aec_index);
         break;
       case '3':
         // 60% of max brightness
-        g_aec_index = kAEC_steps * 0.6;
+        g_aec_index = AEC_steps * 0.6;
         g_xp_sensor_ptr->set_aec_index(g_aec_index);
         break;
       case '4':
         // max brightness
-        g_aec_index = kAEC_steps - 1;
+        g_aec_index = AEC_steps - 1;
         g_xp_sensor_ptr->set_aec_index(g_aec_index);
         break;
       case '+':
       case '=':
         ++g_aec_index;
-        if (g_aec_index >= kAEC_steps) g_aec_index = kAEC_steps - 1;
+        if (g_aec_index >= AEC_steps) g_aec_index = AEC_steps - 1;
         g_xp_sensor_ptr->set_aec_index(g_aec_index);
         break;
       case ']':
         g_aec_index += 5;
-        if (g_aec_index >= kAEC_steps) g_aec_index = kAEC_steps - 1;
+        if (g_aec_index >= AEC_steps) g_aec_index = AEC_steps - 1;
         g_xp_sensor_ptr->set_aec_index(g_aec_index);
         break;
       case '-':
@@ -562,36 +686,23 @@ bool process_gain_control(char keypressed) {
 void thread_proc_img() {
   VLOG(1) << "========= thread_proc_img thread starts";
   // mode compatibility is done in main
-  cv::Mat img_lr_display, img_l_display, img_r_display;
+  cv::Mat img_l_display, img_r_display, img_lr_display;
   // cv::namedWindow has to be used in a single place
   if (!FLAGS_headless) {
-    cv::namedWindow("img_lr");
-    cv::moveWindow("img_lr", 1, 1);
     img_lr_display.create(g_img_size.height, g_img_size.width * 2, CV_8UC3);
     img_l_display = img_lr_display(cv::Rect(0, 0, g_img_size.width, g_img_size.height));
     img_r_display = img_lr_display(cv::Rect(g_img_size.width, 0,
-                                            g_img_size.width, g_img_size.height));
-    if (FLAGS_depth) {
-      cv::namedWindow("depth_canvas");
-      cv::moveWindow("depth_canvas", g_img_size.width * 2, 1);
-    }
-    if (FLAGS_calib_mode) {
-      cv::namedWindow("coverage l");
-      cv::moveWindow("coverage l", 1, g_img_size.height);
-      cv::namedWindow("coverage r");
-      cv::moveWindow("coverage r", g_img_size.width, g_img_size.height);
-    }
+                                              g_img_size.width, g_img_size.height));
   }
   const bool is_color = g_xp_sensor_ptr->is_color();
 
 #ifdef HAS_OPENCV_VIZ
   cv::viz::Viz3d viz_window;
-  if (FLAGS_depth && !FLAGS_headless && FLAGS_viz3d) {
+  if ((FLAGS_depth || FLAGS_ir_depth) && !FLAGS_headless && FLAGS_viz3d) {
     viz_window = cv::viz::Viz3d("depth");
     viz_window.setBackgroundColor(cv::viz::Color::bluberry());
   }
 #endif
-  cv::Mat depth_canvas;
   cv::Mat hist_canvas(256, 256, CV_8UC3);
   cv::Mat hist_canvas_l = hist_canvas(cv::Rect(0, 0,
                                                hist_canvas.cols,
@@ -599,8 +710,6 @@ void thread_proc_img() {
   cv::Mat hist_canvas_r = hist_canvas(cv::Rect(0, hist_canvas.rows / 2,
                                                hist_canvas.cols,
                                                hist_canvas.rows / 2));
-  cv::Ptr<cv::StereoBM> bm_matcher = cv::StereoBM::create(96, /* numDisparities divisble by 16*/
-                                                          21  /* blockSize */);
   XP::DuoCalibParam calib_param;
   if (!FLAGS_calib_yaml.empty()) {
     if (!calib_param.LoadCamCalibFromYaml(FLAGS_calib_yaml)) {
@@ -610,6 +719,13 @@ void thread_proc_img() {
     if (g_img_size != calib_param.Camera.img_size) {
       LOG(ERROR) << "g_img_size = " << g_img_size
       << " != calib info" << calib_param.Camera.img_size;
+      return;
+    }
+  }
+  XP::DuoCalibParam ir_calib_param;
+  if (FLAGS_ir_depth && !FLAGS_ir_calib_yaml.empty()) {
+    if (!ir_calib_param.LoadCamCalibFromYaml(FLAGS_ir_calib_yaml)) {
+      LOG(ERROR) << FLAGS_ir_calib_yaml << " cannot be loaded";
       return;
     }
   }
@@ -628,8 +744,10 @@ void thread_proc_img() {
   }
 
   // These image Mat will be assigned properly according to the sensor type
-  cv::Mat img_l_mono, img_r_mono, img_l_color, img_r_color;
-
+  cv::Mat img_l_mono, img_r_mono, img_l_color, img_r_color, depth_canvas;
+  if (FLAGS_depth || FLAGS_ir_depth) {
+    depth_canvas.create(g_img_size.height, g_img_size.width, CV_8UC3);
+  }
   // for ORB detector
   vector<cv::Mat_<uchar>> cam_mask_lr(2);
   if (!FLAGS_calib_yaml.empty()) {
@@ -653,7 +771,7 @@ void thread_proc_img() {
     bool pop_to_back = FLAGS_calib_verify || FLAGS_orb_verify;
     if (stereo_image_queue.size() > 10) {
       pop_to_back = true;
-      if (!FLAGS_depth) {
+      if (!FLAGS_depth && !FLAGS_ir_depth) {
         // only show error if no additional computation is needed
         LOG(ERROR) << "stereo_image_queue too long (" << stereo_image_queue.size()
                    << "). Pop to back";
@@ -682,7 +800,10 @@ void thread_proc_img() {
         thread_proc_img_rate = 10 * 1000  / ms;
       }
     }
-
+    if (!FLAGS_spacebar_mode && !FLAGS_record_path.empty()) {
+      // always true
+      save_img = true;
+    }
     // Get the mono/color image Mats properly
     // Sanity check first
     if (is_color) {
@@ -699,31 +820,14 @@ void thread_proc_img() {
       cv::cvtColor(img_r_mono, img_r_color, cv::COLOR_GRAY2BGR);
     }
 
-    bool save_img = false;
-    if (!FLAGS_spacebar_mode && !FLAGS_record_path.empty()) {
-      // always true
-      save_img = true;
-    }
-    char keypressed = cv::waitKey(10);
-    if (keypressed == 27) {
-      // ESC
-      kill_all_shared_queues();
-      run_flag = false;
-      break;
-    } else if (keypressed == 32 && !FLAGS_record_path.empty()) {
-      // space
-      save_img = true;
-    } else if (keypressed != -1) {
-      if (!process_gain_control(keypressed)) {
-        LOG(ERROR) << "cannot process gain control";
-      }
-      if (!process_infrared_pwm(keypressed)) {
-        LOG(ERROR) << "cannot process infrared control";
-      }
-    }
     if (!FLAGS_headless) {
-      img_l_color.copyTo(img_l_display);
-      img_r_color.copyTo(img_r_display);
+      const int rows = img_l_color.rows;
+      const int cols = img_r_color.cols;
+      for (int r = 0; r < rows; ++r) {
+        uchar* display_lr_img_ptr = img_lr_display.ptr(r + 0);
+        memmove(display_lr_img_ptr, img_l_color.ptr(r), cols * 3);
+        memmove(display_lr_img_ptr + cols * 3, img_r_color.ptr(r), cols * 3);
+      }
 
       if (FLAGS_calib_verify || FLAGS_orb_verify) {
         verify_calibration(cam_mask_lr,
@@ -743,8 +847,19 @@ void thread_proc_img() {
         if (XP::sampleBrightnessHistogram(img_r_mono, &histogram)) {
           XP::drawHistogram(&hist_canvas_r, histogram);
         }
-        imshow("histogram", hist_canvas);
+        image_thread_safe_copy(&g_hist_canvas, hist_canvas);
       }
+    }
+
+    cv::Mat img_l_ir, img_r_ir;
+    if (FLAGS_ir_depth) {
+      StereoImage IR_latest_img;
+      // Pop latest IR image for depth process
+      if (!IR_depth_queue.wait_and_pop_to_back(&IR_latest_img)) {
+        break;
+      }
+      img_l_ir = IR_latest_img.l;
+      img_r_ir = IR_latest_img.r;
     }
 
     if (FLAGS_depth) {
@@ -758,7 +873,25 @@ void thread_proc_img() {
 #else
                            &depth_canvas);
 #endif  // HAS_OPENCV_VIZ
+      image_thread_safe_copy(&g_depth_canvas, depth_canvas);
     }
+
+    if (FLAGS_ir_depth) {
+      process_stereo_ir_depth(calib_param,
+                              ir_calib_param,
+                              img_l_ir,
+                              img_r_ir,
+                              img_l_mono,
+                              save_img,
+#ifdef HAS_OPENCV_VIZ
+                              &depth_canvas,
+                              &viz_window);
+#else
+                              &depth_canvas);
+#endif  // HAS_OPENCV_VIZ
+      image_thread_safe_copy(&g_depth_canvas, depth_canvas);
+    }
+
     // show some debug info
     std::string debug_string;
     float img_rate = g_xp_sensor_ptr->get_image_rate();
@@ -787,18 +920,10 @@ void thread_proc_img() {
                    cv::Scalar(0, 255, 0));
         }
       }
-      cv::putText(img_l_display, debug_string,
+      cv::putText(img_lr_display, debug_string,
                   cv::Point(15, 15), cv::FONT_HERSHEY_COMPLEX, 0.5,
                   cv::Scalar(255, 0, 255), 1);
-
-#ifdef __ARM_NEON__
-      if ((frame_counter & 1) == 0) {
-        imshow("img_lr", img_lr_display);
-      }
-#else
-      // imshow("img_lr", img_lr_display);
-      imshow("img_lr", img_lr_display);
-#endif
+      image_thread_safe_copy(&g_img_lr_display, img_lr_display);
     } else {
       // FLAGS_headless is true
       std::cout << debug_string << std::endl;
@@ -812,29 +937,114 @@ void thread_proc_img() {
       img_for_save.name = ss.str();
       img_for_save.l = stereo_img.l.clone();  // The channels are mono: 1, color: 3
       img_for_save.r = stereo_img.r.clone();  // The channels are mono: 1, color: 3
-      if (FLAGS_depth) {
-        img_for_save.xyz = g_depth_xyz_img.clone();
+      if (FLAGS_depth || FLAGS_ir_depth) {
+          img_for_save.xyz = g_depth_xyz_img.clone();
       }
       imgs_for_saving_queue.push_back(img_for_save);
+      save_img = false;  // reset
     }
     ++frame_counter;
-    // waitKey will be used in the next loop
-    usleep(1000);  // sleep for 1ms
     VLOG(1) << "========= thread_proc_img loop ends";
   }
   VLOG(1) << "========= thread_proc_img stops";
 }
 
+// Threads
+void thread_proc_ir_img() {
+  VLOG(1) << "========= thread_proc_ir_img thread starts";
+  // mode compatibility is done in main
+  cv::Mat img_l_IR_display, img_r_IR_display, img_lr_IR_display;
+  if (!FLAGS_headless) {
+    img_lr_IR_display.create(g_img_size.height / 2, g_img_size.width, CV_8UC1);
+    img_l_IR_display = img_lr_IR_display(cv::Rect(0, 0, g_img_size.width / 2,
+                                                    g_img_size.height / 2));
+    img_r_IR_display = img_lr_IR_display(cv::Rect(g_img_size.width / 2, 0,
+                                                    g_img_size.width / 2, g_img_size.height / 2));
+  }
+
+  size_t frame_counter = 0;
+  std::chrono::time_point<steady_clock> pre_proc_time = steady_clock::now();
+  float thread_proc_img_rate = 0.f;
+  while (run_flag) {
+    VLOG(1) << "========= thread_proc_img loop starts";
+    // check if the ir imgs queue is too long
+    bool IR_pop_to_back = false;
+    if (IR_image_queue.size() > 10) {
+      IR_pop_to_back = true;
+      LOG(ERROR) << "IR_image_queue too long (" << IR_image_queue.size()
+                 << "). Pop to back";
+    }
+    StereoImage IR_img;
+    if (IR_pop_to_back) {
+      // record and calib_verify cannot be set at the same time
+      if (!IR_image_queue.wait_and_pop_to_back(&IR_img)) {
+        break;
+      }
+      VLOG(1) << "IR_image_queue.wait_and_pop_front done";
+    } else {
+      if (!IR_image_queue.wait_and_pop_front(&IR_img)) {
+        break;
+      }
+      VLOG(1) << "IR_image_queue.wait_and_pop_front done";
+    }
+    // Compute the processing rate
+    if (frame_counter % 10 == 0) {
+      const int ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          steady_clock::now() - pre_proc_time).count();
+      pre_proc_time = steady_clock::now();
+      thread_proc_img_rate = 10 * 1000  / ms;
+    }
+    if (!FLAGS_headless) {
+      IR_img.l.copyTo(img_l_IR_display);
+      IR_img.r.copyTo(img_r_IR_display);
+    }
+
+    if (!FLAGS_spacebar_mode && !FLAGS_record_path.empty()) {
+      // always true
+      save_ir_img = true;
+    }
+
+    // show some debug info
+    float ir_img_rate = g_xp_sensor_ptr->get_ir_image_rate();
+    char buf[100];
+    snprintf(buf, sizeof(buf),
+             "img %4.1f Hz proc %4.1f Hz time %.2f sec",
+             ir_img_rate, thread_proc_img_rate, IR_img.ts_100us * 1e-4);
+    std::string debug_string = std::string(buf);
+    if (!FLAGS_headless) {
+      cv::putText(img_lr_IR_display, debug_string,
+                  cv::Point(15, 15), cv::FONT_HERSHEY_COMPLEX, 0.5,
+                  cv::Scalar(255, 0, 255), 1);
+    image_thread_safe_copy(&g_img_lr_IR_display, img_lr_IR_display);
+    } else {
+      // FLAGS_headless is true
+      std::cout << debug_string << std::endl;
+    }
+
+    if (save_ir_img) {
+      ImgForSave IR_img_for_save;
+      uint64_t IR_img_time_100us = static_cast<uint64_t>(IR_img.ts_100us);
+      std::ostringstream ss_IR;
+      ss_IR << std::setfill('0') << std::setw(10) << IR_img_time_100us;
+      IR_img_for_save.name = ss_IR.str();
+      IR_img_for_save.l = IR_img.l.clone();
+      IR_img_for_save.r = IR_img.r.clone();
+      IR_imgs_for_saving_queue.push_back(IR_img_for_save);
+      save_ir_img = false;  // reset
+    }
+    ++frame_counter;
+    usleep(1000);  // sleep for 1ms
+    VLOG(1) << "========= thread_proc_ir_img loop ends";
+  }
+  VLOG(1) << "========= thread_proc_ir_img stops";
+}
+
 void thread_save_img() {
+  save_img = false;  // reset
   if (FLAGS_record_path.empty()) {
     return;
   }
-  namespace fs = boost::filesystem;
-  fs::create_directory(fs::path(FLAGS_record_path) / "l");
-  fs::create_directory(fs::path(FLAGS_record_path) / "r");
-  if (FLAGS_depth) {
-    fs::create_directory(fs::path(FLAGS_record_path) / "Z");
-  }
+
   cv::Mat cache_img_l, cache_img_r;
   // for verify point coverage
   vector<vector<vector<cv::Point2f>>> detected_corners_lr;
@@ -901,11 +1111,8 @@ void thread_save_img() {
                     cv::Scalar(255, 0, 255), 1);
         for (const vector<cv::Point2f>& detected_corners : detected_corners_lr[lr]) {
           for (const cv::Point2f& pt : detected_corners) {
-            // it is possible april tag returns -1 to size + 1 results
-            CHECK_GE(pt.x, -1);
-            CHECK_LT(pt.x, g_img_size.width + 1);
-            CHECK_GE(pt.y, -1);
-            CHECK_LT(pt.y, g_img_size.height + 1);
+            // The boundary check has been done in MARKER::det_tag.  We tolerate up to 1 pixel
+            // out of image boundary.
             visualize_img_lr[lr].at<cv::Vec3b>(static_cast<int>(pt.y),
                                                static_cast<int>(pt.x)) = cv::Vec3b(0, 0xff, 0);
           }
@@ -919,15 +1126,32 @@ void thread_save_img() {
                                      FLAGS_verbose,  // verbose,
                                      &visualize_img_lr[lr]);
       }
-      if (!FLAGS_headless) {
-        imshow("coverage l", visualize_img_lr[0]);
-        imshow("coverage r", visualize_img_lr[1]);
-      }
+      image_thread_safe_copy(&g_visualize_img_lr[0], visualize_img_lr[0]);
+      image_thread_safe_copy(&g_visualize_img_lr[1], visualize_img_lr[1]);
     }
     VLOG(1) << "========= thread_save_img loop ends";
   }
   VLOG(1) << "========= thread_save_img thread stops";
 }
+
+void thread_save_ir_img() {
+  VLOG(1) << "========= thread_save_ir_img thread starts";
+  save_ir_img = false;  // reset
+  if (FLAGS_record_path.empty()) {
+    return;
+  }
+  while (run_flag) {
+    ImgForSave img_for_save;
+    if (!IR_imgs_for_saving_queue.wait_and_pop_to_back(&img_for_save)) {
+      break;
+    }
+    cv::imwrite(FLAGS_record_path + "/l_IR/" + img_for_save.name + ".png", img_for_save.l);
+    cv::imwrite(FLAGS_record_path + "/r_IR/" + img_for_save.name + ".png", img_for_save.r);
+    VLOG(1) << "========= thread_save_ir_img loop ends";
+  }
+  VLOG(1) << "========= thread_save_ir_img thread stops";
+}
+
 void thread_write_imu_data() {
   VLOG(1) << "========= thread_write_imu_data thread starts";
   // write imu data
@@ -950,7 +1174,8 @@ void thread_write_imu_data() {
       // The imu timestamp is in 100us
       // accel is in m/s^2
       // angv is in rad/s
-      imu_fstream << imu_data.time_stamp << " "
+      uint64_t ts_100us = static_cast<uint64_t>(imu_data.time_stamp);
+      imu_fstream << ts_100us << " "
                   << imu_data.accel[0] << " "
                   << imu_data.accel[1] << " "
                   << imu_data.accel[2] << " "
@@ -1030,6 +1255,49 @@ int main(int argc, char** argv) {
     LOG(ERROR) << "orb_verify and calib_verify is set at the same time";
     return -1;
   }
+  if (FLAGS_ir_depth && (FLAGS_ir_calib_yaml.empty() || FLAGS_calib_yaml.empty() ||
+      FLAGS_depth_param_yaml.empty())) {
+    LOG(ERROR) << "You must set ir_calib_yaml, calib_yaml and depth_param_yaml to enable ir_depth";
+    return -1;
+  }
+  g_auto_gain = FLAGS_auto_gain;
+  run_flag = true;
+  g_infrared_mode = XPDRIVER::XP_SENSOR::OFF;
+  g_infrared_index = 200;
+  g_xp_sensor_ptr.reset(new XpSensorMultithread(FLAGS_sensor_type,
+                                                g_auto_gain,
+                                                FLAGS_imu_from_image,
+                                                FLAGS_dev_name,
+                                                FLAGS_wb_mode));
+  if (g_xp_sensor_ptr->init()) {
+    VLOG(1) << "XpSensorMultithread init succeeded!";
+  } else {
+    LOG(ERROR) << "XpSensorMultithread failed to init";
+    return -1;
+  }
+  // check sensor_type after driver match
+  g_xp_sensor_ptr->get_sensor_type(&XP_sensor_type);
+  uint16_t width, height;
+  // default param. Will be changed if calib yaml file is provided
+  if (!(g_xp_sensor_ptr->get_sensor_resolution(&width, &height)))
+    return -1;
+
+  std::string deviceID;
+  if (!(g_xp_sensor_ptr->get_sensor_deviceid(&deviceID))) {
+    return -1;
+  } else {
+    // a interface demo to call deviceID
+    // LOG(ERROR) << "deviceID in driver_demo:" << *deviceID;
+  }
+  g_img_size.width = width;
+  g_img_size.height = height;
+  // FACE is a special XP3
+  if (XP_sensor_type == SensorType::FACE) {
+    g_img_size.height = width;
+    g_img_size.width = height;
+  }
+
+  g_has_IR = (XP_sensor_type == SensorType::XPIRL2 || XP_sensor_type == SensorType::XPIRL3);
   if (!FLAGS_record_path.empty()) {
     // First make sure record_path exists
     namespace fs = boost::filesystem;
@@ -1054,6 +1322,16 @@ int main(int argc, char** argv) {
         cout << "Created " << FLAGS_record_path << "\n";
       }
     }
+    namespace fs = boost::filesystem;
+    fs::create_directory(fs::path(FLAGS_record_path) / "l");
+    fs::create_directory(fs::path(FLAGS_record_path) / "r");
+    if (FLAGS_depth || FLAGS_ir_depth) {
+      fs::create_directory(fs::path(FLAGS_record_path) / "Z");
+    }
+    if (g_has_IR) {
+      fs::create_directory(fs::path(FLAGS_record_path) / "l_IR");
+      fs::create_directory(fs::path(FLAGS_record_path) / "r_IR");
+    }
   }
 #ifndef HAS_OPENCV_VIZ
   if (FLAGS_viz3d) {
@@ -1061,62 +1339,143 @@ int main(int argc, char** argv) {
     FLAGS_viz3d = false;
   }
 #endif
-  g_auto_gain = FLAGS_auto_gain;
-  run_flag = true;
-  g_auto_infrared = false;
-  g_aec_index = 120;
-  g_infrared_index = 125;
+  if (FLAGS_calib_mode) {
+    for (int lr = 0; lr < 2; ++lr) {
+      if (g_visualize_img_lr[lr].image.rows == 0) {
+        g_visualize_img_lr[lr].image.create(g_img_size, CV_8UC3);
+      }
+    }
+  }
 
-  // TODO(mingyu): Restore the support for XP3s?
-  if (FLAGS_sensor_type == "LI"
-      || FLAGS_sensor_type == "XP"
-      || FLAGS_sensor_type == "XP2"
-      || FLAGS_sensor_type == "XP3"
-      || FLAGS_sensor_type == "XPIRL"
-      || FLAGS_sensor_type == "XPIRL2"
-      || FLAGS_sensor_type == "FACE") {
-    g_xp_sensor_ptr.reset(new XpSensorMultithread(FLAGS_sensor_type,
-                                                  g_auto_gain,
-                                                  FLAGS_imu_from_image,
-                                                  FLAGS_dev_id));
-    if (g_xp_sensor_ptr->init(g_aec_index)) {
-      VLOG(1) << "XpSensorMultithread init succeeeded!";
-    } else {
-      LOG(ERROR) << "XpSensorMultithread failed to init";
-      return -1;
+  // cv::namedWindow has to be used in a single place
+  if (!FLAGS_headless) {
+    cv::namedWindow("img_lr");
+    cv::moveWindow("img_lr", 1, 1);
+    g_img_lr_display.image.create(g_img_size.height, g_img_size.width * 2, CV_8UC3);
+    g_img_lr_display.image_name = "img_lr";
+    if (g_has_IR) {
+      g_img_lr_IR_display.image.create(g_img_size.height / 2, g_img_size.width, CV_8UC1);
+      g_img_lr_IR_display.image_name = "img_lr_IR";
     }
-    uint16_t width, height;
-    // default param. Will be changed if calib yaml file is provided
-    if (!(g_xp_sensor_ptr->get_sensor_resolution(&width, &height)))
-      return -1;
-    g_img_size.width = width;
-    g_img_size.height = height;
-    // FACE is a special XP3
-    if (FLAGS_sensor_type == "FACE") {
-      g_img_size.height = width;
-      g_img_size.width = height;
+    if (FLAGS_depth || FLAGS_ir_depth) {
+      cv::namedWindow("depth_canvas");
+      cv::moveWindow("depth_canvas", 1, 1);
+      g_depth_canvas.image.create(g_img_size.height, g_img_size.width, CV_8UC3);
+      g_depth_canvas.image_name = "depth_canvas";
     }
-  } else {
-    LOG(ERROR) << "sensor_type " << FLAGS_sensor_type << " not supported";
-    return -1;
+    if (FLAGS_show_hist) {
+      g_hist_canvas.image.create(256, 256, CV_8UC3);
+      g_hist_canvas.image_name = "histogram";
+    }
+    if (FLAGS_calib_mode) {
+      cv::namedWindow("coverage l");
+      cv::moveWindow("coverage l", 1, g_img_size.height);
+      cv::namedWindow("coverage r");
+      cv::moveWindow("coverage r", g_img_size.width, g_img_size.height);
+      g_visualize_img_lr[0].image_name = "coverage l";
+      g_visualize_img_lr[1].image_name = "coverage r";
+    }
   }
   // Prepare the thread pool to handle the data from XpSensorMultithread
   vector<std::thread> thread_pool;
   thread_pool.push_back(std::thread(thread_proc_img));
-  thread_pool.push_back(std::thread(thread_write_imu_data));
+  if (g_has_IR) {
+    thread_pool.push_back(std::thread(thread_proc_ir_img));
+  }
+
   if (!FLAGS_record_path.empty()) {
+    g_xp_sensor_ptr->set_imu_data_callback(imu_data_callback);
+    thread_pool.push_back(std::thread(thread_write_imu_data));
     thread_pool.push_back(std::thread(thread_save_img));
+    if (g_has_IR) {
+      thread_pool.push_back(std::thread(thread_save_ir_img));
+    }
   }
   // Register callback functions and let XpSensorMultithread spin
   CHECK(g_xp_sensor_ptr);
   g_xp_sensor_ptr->set_image_data_callback(image_data_callback);
-  g_xp_sensor_ptr->set_imu_data_callback(imu_data_callback);
+  if (g_has_IR) {
+    g_xp_sensor_ptr->set_IR_data_callback(IR_data_callback);
+  }
   g_xp_sensor_ptr->run();
+
+  size_t frame_counter = 0;
+  if (!FLAGS_headless) {
+    while (true) {
+#ifdef __ARM_NEON__
+      if (frame_counter % 2 == 0) // NOLINT
+#endif
+      {
+        image_thread_safe_show(&g_img_lr_display);
+        if (g_has_IR && g_infrared_mode != XPDRIVER::XP_SENSOR::OFF) {
+          image_thread_safe_show(&g_img_lr_IR_display);
+        }
+        if (FLAGS_depth || FLAGS_ir_depth) {
+          image_thread_safe_show(&g_depth_canvas);
+        }
+        if (FLAGS_show_hist) {
+          image_thread_safe_show(&g_hist_canvas);
+        }
+        if (FLAGS_calib_mode) {
+          image_thread_safe_show(&g_visualize_img_lr[0]);
+          image_thread_safe_show(&g_visualize_img_lr[1]);
+        }
+      }
+      ++frame_counter;
+      char keypressed = cv::waitKey(20);
+      if (keypressed == 27) {
+        // ESC
+        kill_all_shared_queues();
+        run_flag = false;
+        break;
+      } else if (keypressed == 32 && !FLAGS_record_path.empty()) {
+        // space
+        save_img = true;
+        save_ir_img = true;
+      } else if (keypressed != -1) {
+        if (!process_gain_control(keypressed)) {
+          LOG(ERROR) << "cannot process gain control";
+        }
+        if (!process_ir_control(keypressed)) {
+          LOG(ERROR) << "cannot process infrared control";
+        }
+      }
+      // waitKey will be used in the next loop
+      usleep(1000);  // sleep for 1ms
+    }
+  }
+
   for (auto& t : thread_pool) {
     t.join();
   }
   if (!g_xp_sensor_ptr->stop()) {
     LOG(ERROR) << "XpSensorMultithread failed to stop properly!";
+  }
+
+  // Release memory first to avoid core dump
+  if (!FLAGS_headless) {
+    g_img_lr_display.image.release();
+    if (g_has_IR) {
+      g_img_lr_IR_display.image.release();
+    }
+    if (FLAGS_depth) {
+      g_depth_canvas.image.release();
+    }
+    if (FLAGS_show_hist) {
+      g_hist_canvas.image.release();
+    }
+    if (FLAGS_calib_mode) {
+      g_visualize_img_lr[0].image.release();
+      g_visualize_img_lr[1].image.release();
+    }
+  }
+  if (FLAGS_depth || FLAGS_ir_depth) {
+    g_depth_xyz_img.release();
+    g_disparity_img.release();
+    g_disparity_buf.release();
+    for (int i = 0; i < g_disparity_ml.size(); ++i) {
+      g_disparity_ml[i].release();
+    }
   }
   cout << "finished safely" << std::endl;
   return 0;

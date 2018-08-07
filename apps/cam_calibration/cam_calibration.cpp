@@ -40,9 +40,9 @@ using std::endl;
 using std::vector;
 using namespace boost::filesystem;  // NOLINT
 DEFINE_string(sensor_type,
-              "UNKNOWN", "LI or XP or XP2 or XP3 or FACE or UDP (receiving)");
+              "UNKNOWN", "XP or XP2 or XP3 or FACE XPIRL or XPIRL2 or XPIRL3 or UDP (receiving)");
 DEFINE_string(device_id, "", "device id of duo camera");
-DEFINE_string(folder_path, "", "folder containing l and r folders");
+DEFINE_string(record_path, "", "folder containing l and r folders");
 DEFINE_string(img_suffix, "png", "image suffix");
 DEFINE_bool(show_reproj, false, "whether or not show image with points in a debug window");
 DEFINE_bool(show_det, false, "whether or not show image with tag detection");
@@ -64,7 +64,8 @@ DEFINE_bool(verify_mode, false, "verify reproj error of existing calib file");
 DEFINE_bool(no_ransac, false, "no ransac");
 DEFINE_bool(extrinsics_only, false, "only perform extrinsics calibration");
 DEFINE_int32(display_timeout, 500, "how many millisec does a window display. 0 is inf");
-DEFINE_int32(dist_order, 8, "8th or 6th order");
+DEFINE_int32(dist_order, 8, "8 (k1 k2 0 0 k3 k4 k5 k6) or 6 (k1 k2 0 0 k3) or 4 (k1 k2 p1 p2)"
+             " or 2 (k1 k2)");
 DEFINE_bool(single_cam_mode, false, "Only calibrate one camera.");
 
 // [NOTE] Assume 5x7 april tag is used.
@@ -111,7 +112,7 @@ int main(int argc, char** argv) {
   google::ParseCommandLineFlags(&argc, &argv, false);
   google::InstallFailureSignalHandler();
   FLAGS_colorlogtostderr = 1;
-  if (FLAGS_folder_path.size() == 0) {
+  if (FLAGS_record_path.size() == 0) {
     google::ShowUsageWithFlags(argv[0]);
     return -1;
   }
@@ -120,8 +121,11 @@ int main(int argc, char** argv) {
     google::ShowUsageWithFlags(argv[0]);
     return -1;
   }
-  if (FLAGS_dist_order != 8 && FLAGS_dist_order != 6) {
-    LOG(ERROR) << "distortion order has to be 8 or 6";
+  if (FLAGS_dist_order != 8 &&
+      FLAGS_dist_order != 6 &&
+      FLAGS_dist_order != 4 &&
+      FLAGS_dist_order != 2) {
+    LOG(ERROR) << "distortion order has to be 8 or 6 or 4 or 2";
     return -1;
   }
   if (FLAGS_extrinsics_only && (FLAGS_load_calib_yaml.empty())) {
@@ -158,7 +162,7 @@ int main(int argc, char** argv) {
 
   // Detect corners first
   for (int lr = 0; lr < camera_max_index; ++lr) {
-    boost::filesystem::path folder_path(FLAGS_folder_path + "/" + lr_folders[lr]);
+    boost::filesystem::path folder_path(FLAGS_record_path + "/" + lr_folders[lr]);
     if (!is_directory(folder_path)) {
       LOG(ERROR) << folder_path << " is not a folder";
       return -1;
@@ -343,10 +347,23 @@ int main(int argc, char** argv) {
         }
         cv::Mat K_ransac = cv::Mat::eye(3, 3, CV_64F);
         cv::Mat dist_ransac;
-        int calib_flag = CV_CALIB_ZERO_TANGENT_DIST;
-        if (FLAGS_dist_order == 6) {
+        int calib_flag;
+        if (FLAGS_dist_order == 2) {
+          calib_flag = (CV_CALIB_ZERO_TANGENT_DIST |
+                        CV_CALIB_FIX_K3 |
+                        CV_CALIB_FIX_K4 |
+                        CV_CALIB_FIX_K5 |
+                        CV_CALIB_FIX_K6);
+        } else if (FLAGS_dist_order == 4) {
+          calib_flag = (CV_CALIB_FIX_K3 |
+                        CV_CALIB_FIX_K4 |
+                        CV_CALIB_FIX_K5 |
+                        CV_CALIB_FIX_K6);
+        } else if (FLAGS_dist_order == 6) {
+          calib_flag = CV_CALIB_ZERO_TANGENT_DIST;
         } else if (FLAGS_dist_order == 8) {
-          calib_flag = calib_flag | CV_CALIB_RATIONAL_MODEL;
+          calib_flag = (CV_CALIB_ZERO_TANGENT_DIST |
+                        CV_CALIB_RATIONAL_MODEL);
         } else {
           LOG(FATAL) << "FLAGS_dist_order = " << FLAGS_dist_order;
         }
@@ -422,10 +439,27 @@ int main(int argc, char** argv) {
         }
         float final_reproj_error = seed_reproj_error;
         if (!FLAGS_no_ransac) {
-          int calib_flag = CV_CALIB_USE_INTRINSIC_GUESS | CV_CALIB_ZERO_TANGENT_DIST;
-          if (FLAGS_dist_order == 8) {
-            calib_flag = calib_flag | CV_CALIB_RATIONAL_MODEL;
+          int calib_flag;
+          if (FLAGS_dist_order == 2) {
+            calib_flag = (CV_CALIB_USE_INTRINSIC_GUESS |
+                          CV_CALIB_ZERO_TANGENT_DIST |
+                          CV_CALIB_FIX_K3 |
+                          CV_CALIB_FIX_K4 |
+                          CV_CALIB_FIX_K5 |
+                          CV_CALIB_FIX_K6);
+          } else if (FLAGS_dist_order == 4) {
+            calib_flag = (CV_CALIB_USE_INTRINSIC_GUESS |
+                          CV_CALIB_FIX_K3 |
+                          CV_CALIB_FIX_K4 |
+                          CV_CALIB_FIX_K5 |
+                          CV_CALIB_FIX_K6);
           } else if (FLAGS_dist_order == 6) {
+            calib_flag = (CV_CALIB_USE_INTRINSIC_GUESS |
+                          CV_CALIB_ZERO_TANGENT_DIST);
+          } else if (FLAGS_dist_order == 8) {
+            calib_flag = (CV_CALIB_USE_INTRINSIC_GUESS |
+                          CV_CALIB_ZERO_TANGENT_DIST |
+                          CV_CALIB_RATIONAL_MODEL);
           } else {
             LOG(FATAL) << "FLAGS_dist_order = " << FLAGS_dist_order;
           }
@@ -447,8 +481,8 @@ int main(int argc, char** argv) {
              << " final_reproj_error " << final_reproj_error
              << " inlier num " << corresponding_board_coordinates_good.size() << std::endl;
         if (corresponding_board_coordinates_good.size() == detected_corners_all.size()) {
-            cout << "all imgs are inliers. Done" << std::endl;
-            break;
+          cout << "all imgs are inliers. Done" << std::endl;
+          break;
         }
       }
       if (best_reproj_error > 4 && !FLAGS_no_ransac) {
@@ -793,14 +827,18 @@ int main(int argc, char** argv) {
   if (FLAGS_sensor_type == "UNKNOWN" ||
       FLAGS_sensor_type == "FACE") {
     duo_calib_param.sensor_type = XP::DuoCalibParam::SensorType::UNKNOWN;
-  } else if (FLAGS_sensor_type == "LI") {
-    duo_calib_param.sensor_type = XP::DuoCalibParam::SensorType::LI;
   } else if (FLAGS_sensor_type == "XP") {
     duo_calib_param.sensor_type = XP::DuoCalibParam::SensorType::XP;
   } else if (FLAGS_sensor_type == "XP2") {
     duo_calib_param.sensor_type = XP::DuoCalibParam::SensorType::XP2;
   } else if (FLAGS_sensor_type == "XP3") {
     duo_calib_param.sensor_type = XP::DuoCalibParam::SensorType::XP3;
+  } else if (FLAGS_sensor_type == "XPIRL") {
+    duo_calib_param.sensor_type = XP::DuoCalibParam::SensorType::XPIRL;
+  } else if (FLAGS_sensor_type == "XPIRL2") {
+    duo_calib_param.sensor_type = XP::DuoCalibParam::SensorType::XPIRL2;
+  } else if (FLAGS_sensor_type == "XPIRL3") {
+    duo_calib_param.sensor_type = XP::DuoCalibParam::SensorType::XPIRL3;
   } else {
     LOG(ERROR) << "Unsupport sensor type";
     duo_calib_param.sensor_type = XP::DuoCalibParam::SensorType::UNKNOWN;
@@ -823,6 +861,23 @@ int main(int argc, char** argv) {
     out.close();
     if (!duo_calib_param.WriteToYaml(FLAGS_save_calib_yaml)) {
       LOG(ERROR) << "Save to " << FLAGS_save_calib_yaml << " failed";
+    }
+    if (FLAGS_sensor_type == "XPIRL3" || FLAGS_sensor_type == "XPIRL2") {
+      XP::DuoCalibParam duo_calib_param_ir = duo_calib_param;
+      for (int i = 0; i < 2; i++) {
+        duo_calib_param_ir.Camera.cameraK_lr[i](0, 0) /= 2;
+        duo_calib_param_ir.Camera.cameraK_lr[i](0, 2) /= 2;
+        duo_calib_param_ir.Camera.cameraK_lr[i](1, 1) /= 2;
+        duo_calib_param_ir.Camera.cameraK_lr[i](1, 2) /= 2;
+      }
+      duo_calib_param_ir.Camera.img_size /= 2;
+      boost::filesystem::path calib_path(FLAGS_save_calib_yaml);
+      std::string ir_calib_path = calib_path.parent_path().string()
+                                  + "/ir_" + calib_path.filename().string();
+      std::cout << "save ir calib yaml" << std::endl;
+      if (!duo_calib_param_ir.WriteToYaml(ir_calib_path)) {
+        LOG(ERROR) << "Save to " << FLAGS_save_calib_yaml << " failed";
+      }
     }
   }
   cv::imwrite(reproj_filename, reproj_img);

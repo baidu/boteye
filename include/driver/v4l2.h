@@ -17,7 +17,8 @@
 #define INCLUDE_DRIVER_V4L2_H_
 #include <stdint.h>
 #include <string>
-#ifdef __linux__
+
+#ifdef __linux__  // Only support linux for now
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <linux/videodev2.h>
@@ -27,12 +28,11 @@
 #include <linux/uvcvideo.h>
 #include <fcntl.h>
 #include <unistd.h>
-#endif  // __linux__
 
 namespace XPDRIVER {
 
 // V4L2 related functions
-static const int V4L2_BUFFER_NUM = 6;
+static const int V4L2_BUFFER_NUM = 4;
 bool init_mmap(int fd);
 bool init_v4l2(const std::string& dev_name,
                int* fd_ptr,
@@ -51,4 +51,5 @@ bool access_next_img_pair_data(int fd,
 bool get_v4l2_resolution(int fd, int* width, int* height);
 }  // namespace XPDRIVER
 
+#endif  // __linux__
 #endif  // INCLUDE_DRIVER_V4L2_H_

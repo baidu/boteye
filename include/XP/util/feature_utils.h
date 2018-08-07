@@ -26,6 +26,7 @@
 #include <vector>
 #include <unordered_map>
 #include <utility>
+#include <string>
 
 namespace XP {
 
@@ -99,8 +100,7 @@ class FeatureTrackDetector {
   // which are updated by the function.
   // flag keep_dead_feat_tracks is to control whether to keep dead feature tracks
   // after each propagation.
-  bool re_detect(const cv::Mat& img_in_smooth,
-                 int request_feat_num,
+  bool re_detect(int request_feat_num,
                  int pyra_level_det,
                  int fast_thresh,
                  const cv::Mat& orb_feat_from_prop,
@@ -131,10 +131,9 @@ class FeatureTrackDetector {
     curr_img_pyramids_.swap(prev_img_pyramids_);
     curr_pyramids_buffer_.swap(prev_pyramids_buffer_);
   }
-  bool detect(const cv::Mat& img_in_smooth,
-              const cv::Mat_<uchar>& mask,
+  bool detect(const cv::Mat_<uchar>& mask,
               int request_feat_num,
-              int pyra_level,  // Total pyramid levels, including the base image
+              int pyra_levels,  // Total pyramid levels, including the base image
               int fast_thresh,
               std::vector<cv::KeyPoint>* key_pnts_ptr,
               cv::Mat* orb_feat_ptr);
@@ -143,7 +142,7 @@ class FeatureTrackDetector {
                         int request_feat_num,
                         const cv::Mat& pre_image_orb_feature,
                         const std::vector<cv::KeyPoint>& pre_image_kpts,
-                        int pyra_level,  // Total pyramid levels, including the base image
+                        int pyra_levels,  // Total pyramid levels, including the base image
                         int fast_thresh,
                         std::vector<cv::KeyPoint>* key_pnts_ptr,
                         cv::Mat* orb_feat_ptr);
@@ -154,6 +153,11 @@ class FeatureTrackDetector {
   void filter_static_features(std::vector<cv::KeyPoint>* key_pnts);
   void update_feature_tracks(std::vector<cv::KeyPoint>* key_pnts);
   void flush_feature_tracks(const std::vector<cv::KeyPoint>& key_pnts);
+  void update_feature_tracks_hist(bool update_active_fts);
+  void output_feature_tracks_hist(std::string frame_ts);
+  inline const std::vector<int>& get_ft_hist() const {
+    return feature_tracks_hist_;
+  }
   inline std::vector<std::pair<int, int> > get_id_to_org_id_vec() const {
     return id_to_org_id_vec_;
   }
@@ -174,6 +178,10 @@ class FeatureTrackDetector {
   // A very simple-minded data structure to bookkeep feature track ids and lengths
   // We will have at most request_feat_num active feature tracks
   std::map<int,  FeatureTrack> feature_tracks_map_;
+
+  // A histogram for lengths of feature tracks
+  // The length of each feature track is added to the histogram before it's dead
+  std::vector<int> feature_tracks_hist_;
 
   // A mask to hold the mask of the union of input mask and optical flow feats mask
   cv::Mat_<uchar> mask_with_of_out_;
@@ -275,10 +283,6 @@ class SlaveImgFeatureDetector {
   const float max_feature_distance_over_baseline_ratio_;
 };
 
-/*
-class DirectMatcher;  // Forward declaration
-class vio::cameras::CameraBase  // Forward declaration
-*/
 class ImgFeaturePropagatorImpl;  // Forward declaration
 class ImgFeaturePropagator {
  public:
@@ -287,15 +291,15 @@ class ImgFeaturePropagator {
                        const cv::Mat_<float>& cur_cv_dist_coeff,
                        const cv::Mat_<float>& ref_cv_dist_coeff,
                        const cv::Mat_<uchar>& cur_mask,
-                       int feat_det_pyramid_level,
                        float min_feature_distance_over_baseline_ratio,
                        float max_feature_distance_over_baseline_ratio);
   ~ImgFeaturePropagator();
 
   bool PropagateFeatures(const cv::Mat& cur_img,
-                         const cv::Mat& ref_img,  // TODO(mingyu): store image pyramids
+                         const std::vector<cv::Mat>& ref_pyra_imgs,
                          const std::vector<cv::KeyPoint>& ref_keypoints,
                          const Eigen::Matrix4f& T_ref_cur,
+                         const bool use_pyra_direct_matcher,
                          std::vector<cv::KeyPoint>* cur_keypoints,
                          cv::Mat* cur_orb_features = nullptr,
                          const bool draw_debug = false);
@@ -311,10 +315,24 @@ bool generate_cam_mask(const cv::Matx33f& K,
                        cv::Mat_<uchar>* cam_mask,
                        float* fov_deg);
 
+bool detect_orb_features(const std::vector<cv::Mat>& img_pyramids,
+                         const std::vector<cv::Mat_<uchar> >& mask_pyramids,
+                         int request_feat_num,
+                         int det_pyra_level,  // The specific pyramid level to do detection
+                         int fast_thresh,
+                         bool use_fast,  // or TomasShi
+                         int enforce_uniformity_radius,  // less than 5 means no enforcement
+                         std::vector<cv::KeyPoint>* key_pnts_ptr,
+                         cv::Mat* orb_feat_ptr,
+                         FeatureTrackDetector* feat_track_detector = nullptr,
+                         float refine_harris_threshold = -1.f);
+
+// This is the OLD interface to do feature detection with an input raw image, and
+// internally compute the image pyramids and then call the NEW interface above.
 bool detect_orb_features(const cv::Mat& img_in_raw,
                          const cv::Mat_<uchar>& mask,
                          int request_feat_num,
-                         int pyra_level,
+                         int pyra_levels,  // Total pyramid levels (including the base pyr0)
                          int fast_thresh,
                          bool use_fast,  // or TomasShi
                          int enforce_uniformity_radius,  // less than 5 means no enforcement
@@ -382,5 +400,36 @@ inline cv::Mat fast_pyra_down_original(const cv::Mat& img_in_smooth) {
   }
   return img_in_small;
 }
+
+// make sure 0x00 keeps 0x00 in the next level
+inline cv::Mat fast_mask_pyra_down(const cv::Mat& mask) {
+  constexpr int compress_ratio = 2;
+  cv::Mat mask_small(mask.rows / compress_ratio,
+                     mask.cols / compress_ratio,
+                     CV_8U);
+#ifndef __FEATURE_UTILS_NO_DEBUG__
+  CHECK_EQ(mask.type(), CV_8U);
+#endif
+  // use our own pyra down for faster performance
+  const int width_step_in = mask.step1();
+  const int width_step_small = mask_small.step1();
+  for (int y = 0; y < mask_small.rows; y++) {
+    for (int x = 0; x < mask_small.cols; x++) {
+      // do not use .at<char> which is slow
+      const int shift0 = (y * compress_ratio) * width_step_in + x * compress_ratio;
+      const int shift1 = shift0 + width_step_in;
+      if (*(mask.data + shift0) == 0x00 ||
+          *(mask.data + shift1) == 0x00 ||
+          *(mask.data + shift0 + 1) == 0x00 ||
+          *(mask.data + shift1 + 1) == 0x00) {
+        *(mask_small.data + y * width_step_small + x) = 0x00;
+      } else {
+        *(mask_small.data + y * width_step_small + x) = 0xff;
+      }
+    }
+  }
+  return mask_small;
+}
+
 }  // namespace XP
 #endif  // XP_INCLUDE_XP_UTIL_FEATURE_UTILS_H_

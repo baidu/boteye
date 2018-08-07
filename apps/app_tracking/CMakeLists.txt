@@ -12,7 +12,6 @@ if (find_index GREATER -1)
 else()
   message(STATUS "Couldn't find libopencv_viz")
 endif()
-add_definitions(-DSHOW_POSE_2D)
 
 add_executable(${PROJECT_NAME}
  plotting_utils.h
@@ -24,12 +23,14 @@ target_include_directories(${PROJECT_NAME} PUBLIC
  ${CMAKE_CURRENT_SOURCE_DIR}
  ${XP_INCLUDE_DIR}
  ${OpenCV_INCLUDE_DIRS}
+ ${Eigen_INCLUDE_DIR}
  /usr/local/include
 )
 target_link_libraries(${PROJECT_NAME}
  ${GLOG_LIBRARY}
  ${GFLAGS_LIBRARY}
  ${XP_LIBRARY}
+ ${XP_DRIVER_LIBRARY}
  ${OpenCV_LIBRARIES}
 )
 

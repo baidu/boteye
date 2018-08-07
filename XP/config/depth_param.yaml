@@ -1,0 +1,18 @@
+%YAML:1.0
+rgb_scale: 2
+use_orig_sgbm: 1
+sgbm_min_disp: 0
+sgbm_num_disp: 48
+sgbm_block_size: 9
+sgbm_p1: 120
+sgbm_p2: 2000
+sgbm_disp12_maxdiff: 1
+sgbm_unqiue_ratio: 8
+sgbm_descriptor_type: 2
+sgbm_blank_range: 15
+
+refine: 1
+use_confidence: 0  # must be 0 now
+wls_lambda: 4000
+wls_sigma: 1.0
+enable_census_mode: 0

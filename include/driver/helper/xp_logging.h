@@ -16,6 +16,8 @@
 
 #ifndef INCLUDE_DRIVER_HELPER_XP_LOGGING_H_
 #define INCLUDE_DRIVER_HELPER_XP_LOGGING_H_
+#include <cstdlib>
+
 /**
  * This file defines all the debug macros of detailed logging.
  */
@@ -43,13 +45,52 @@
 #include <assert.h>
 #include <iostream>
 
+#include <sstream>
 // Disable all debug loggings
-#define XP_LOG_INFO(msg) { std::cout << msg << "\n"; }
-#define XP_LOG_WARNING(msg) { std::cout << "WARNING: " << msg << "\n"; }
-#define XP_LOG_ERROR(msg) { std::cerr << msg << "\n"; }
-#define XP_LOG_FATAL(msg) { std::cerr << msg << "\n"; exit(EXIT_FAILURE);}
+
+#ifdef __ANDROID__
+  #include <android/log.h>
+
+  #define XP_LOG_INFO(msg) \
+  {   \
+    std::ostringstream oss;\
+    oss << msg; oss.flush();\
+    __android_log_print(ANDROID_LOG_INFO, "boteyeR:",  oss.str().c_str());\
+    oss.clear();\
+  }
+  #define XP_LOG_WARNING(msg) \
+  {   \
+    std::ostringstream oss;\
+    oss << msg; oss.flush();\
+    __android_log_print(ANDROID_LOG_WARN, "boteyeR:",  oss.str().c_str());\
+    oss.clear();\
+  }
+  #define XP_LOG_ERROR(msg) \
+  {   \
+    std::ostringstream oss;\
+    oss << msg; oss.flush();\
+    __android_log_print(ANDROID_LOG_ERROR, "boteyeR:",  oss.str().c_str());\
+    oss.clear();\
+  }
+  #define XP_LOG_FATAL(msg) \
+  {   \
+    std::ostringstream oss;\
+    oss << msg; oss.flush();\
+    __android_log_print(ANDROID_LOG_ERROR, "boteyeR:",  oss.str().c_str());\
+    oss.clear();\
+    exit(EXIT_FAILURE);\
+  }
+//    #define XP_VLOG(vlog_level, msg)
+  #define XP_VLOG(level, msg)
+#else
+#define XP_LOG_INFO(msg) { std::cout << msg << std::endl; }
+#define XP_LOG_WARNING(msg) { std::cout << "WARNING: " << msg << std::endl; }
+#define XP_LOG_ERROR(msg) { std::cerr << msg << std::endl; }
+#define XP_LOG_FATAL(msg) { std::cerr << msg << std::endl; exit(EXIT_FAILURE);}
+// TODO(zhoury) implement XP_VLOG
 #define XP_VLOG(vlog_level, msg)
-// #define XP_VLOG(vlog_level, msg) { std::cerr << "VLOG " << vlog_level << ": " << msg << "\n"; }
+#endif
+
 #define XP_CHECK(val) { assert(val); }
 #define XP_CHECK_EQ(val1, val2) { assert((val1) == (val2)); }
 #define XP_CHECK_GT(val1, val2) { assert((val1) > (val2)); }

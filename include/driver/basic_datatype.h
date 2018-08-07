@@ -17,6 +17,7 @@
 #define INCLUDE_DRIVER_BASIC_DATATYPE_H_
 
 #include <stdint.h>
+#include <string>
 
 namespace XPDRIVER {
 
@@ -32,18 +33,24 @@ struct XP_20608_data {
   float gyro[3];
   float temp;
 };
+enum class ImageType {
+  RGB = 1,
+  IR = 2,
+  Unkown_type = 255
+};
 
 enum class SensorType {
-  LI = 0,
-  XP = 1,
-  XP2 = 2,
-  XP3 = 3,
-  FACE = 4,
-  XPIRL = 5,
-  XPIRL2 = 6,
-  XP3s = 7,
+  XP = 0,
+  XP2 = 1,
+  XP3 = 2,
+  FACE = 3,
+  XPIRL = 4,
+  XPIRL2 = 5,
+  XPIRL3 = 6,
   Unkown_sensor = 255
 };
+
+const std::string SensorName[] = {"XP", "XP2", "XP3", "FACE", "XPIRL", "XPIRL2", "XPIRL3"};
 
 // need to know camera len more info to refactor this structure
 enum class CameraLenType {

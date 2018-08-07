@@ -46,5 +46,28 @@ struct PoseAndTime {
   Eigen::Matrix4f T;
 };
 
+// TODO(mingyu): Complete the constructor
+// TODO(mingyu): We may need a real depth map in the future for
+//               local path planning / obstacle avoidance
+// TODO(mingyu): Need an extra state to indicates vio is ok but relocalization fails so that
+//               we can enter the *searching* mode for relocalziation
+struct ViSlamMessage {
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  Eigen::Matrix4f T_WD_mapper;
+  Eigen::Matrix4f T_WD_vio;
+  float pose_ts;         // the timestamp (in sec, the sensor time) of this pose
+  std::vector<Eigen::Vector2f> obstacles_2d;  // x & y coordinates of obstacles in {G}
+  float obstacle_ts;     // the timestamp (in sec) of this obstacle information
+  bool vio_stable;       // vio stable means vio is NOT lost
+  bool mapper_stable;    // mapper stable means mapper is NOT in reloc state
+  bool obstacle_detected;
+};
+
+struct MouseData {
+  bool mouse_pressed = false;
+  int pixel_x;
+  int pixel_y;
+};
+
 }  // namespace XP
 #endif  // XP_INCLUDE_XP_DATA_ATOM_BASIC_DATATYPE_H_

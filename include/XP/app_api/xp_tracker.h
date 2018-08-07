@@ -17,24 +17,47 @@
 #ifndef __XP_TRACKER_H__  // NOLINT
 #define __XP_TRACKER_H__  // NOLINT
 #include <XP/app_api/pose_packet.h>
+#include <XP/data_atom/basic_datatype.h>
+#include <XP/worker/actuator.h>
+#include <XP/helper/param.h>
 #include <opencv2/opencv.hpp>
-#include <string>
+#include <chrono>
 #include <functional>
+#include <memory>
+#include <string>
 
 namespace XP_TRACKER {
 
 /**
- * \brief Initialize the sensor. This has to be called before init_tracker.
- *        If this fails, it can be a driver / firmware / hardware issue.
- * \param sensor_type Currently support LI, XP, XP2, XP3
- * \param auto_gain Whether or not to use auto gain / exposure control
- * \param imu_from_image Whether or not to pull imu from image data
- * \param sensor_dev_path File to the sensor (e.g. /dev/video1)
+ * \brief This is an experimental function that requires Intel Neural Compute Stick (NCS) to be
+ *        inserted to the host device and NCSDK installed.
+ * \param output_layer_string The name of the output layer name of the input network (graph).
+ *                            Currently only support "Softmax" and "DetectionOutput".
+ * \param graph_filename The full file path to the graph file (binary) to be loaded to NCS.
+ * \param network_image_width The network input image width
+ * \param network_image_height The network input image height
+ * \param network_means  The means per channel (total 3) to preprocess the input image
+ * \param network_scales The scale per channel (total 3) to preprocess the input image
+ * \return success or not.  Always return false if NCSDK is not installed or NCS is not found.
  */
-bool init_sensor(const std::string& sensor_type,
-                 const bool auto_gain = true,
-                 const bool imu_from_image = false,
-                 const std::string sensor_dev_path = "");
+bool init_ncs_worker(const std::string& output_layer_string,
+                     const std::string& graph_filename,
+                     const int network_image_width,
+                     const int network_image_height,
+                     const float network_means[],
+                     const float network_scales[]);
+/**
+ * \brief Set the canvas for drawing the NCS result.
+ * \param canvas Pre-allocated cv::Mat CV_8UC3 for visualization of the NCS result.
+ */
+bool set_ncs_canvas(cv::Mat* canvas);
+
+/**
+ * \brief Initialize the sensor to run with a live sensor.  The user is responsible to properly
+ *        initilize the live sensor, register the data callbacks, and start/stop running.
+ * \return success or not
+ */
+bool init_live_sensor();
 
 /**
  * \brief Initialzie the data loader that loads images and imu from a folder.
@@ -56,6 +79,7 @@ bool init_data_loader(const std::string& folder_path);
  */
 bool init_tracker(const std::string& vio_config,
                   const std::string& bow_dic_path,
+                  const std::string& depth_param_path,
                   const std::string& cam_calib_file_path,
                   const bool use_fast_feat,
                   const bool use_iba_for_vio);
@@ -80,6 +104,16 @@ bool init_udp_stream(const std::string& udp_ip, int port);
  */
 bool init_udp_listen(int port);
 /**
+ * \brief Initialize robot client to log and get commands from server
+ * \param server_address address of server
+ * \return success or not
+ */
+bool init_robot_client(const std::string &server_address,
+                       const std::string &stream_address,
+                       const std::string &device_id,
+                       unsigned int stream_width,
+                       unsigned int stream_height);
+/**
  * \brief Load map data (in pb format) before run tracker.
  * \param pb_path protobuf file path
  * \return success or not
@@ -93,13 +127,14 @@ bool load_map(const std::string& pb_path);
 bool save_map(const std::string& pb_path);
 /**
  * \brief Set the record path for the current live tracking session before calling run_tracker_MT.
- *        Currently only support LI/XP/XP2 sensors.
  * \param record_path record file path (the base folder)
- * \param cam_calib_path sensor calibration yaml file path (optional)
- *                       If provided, the calib file will also be saved to record_path
- * \return success or not
+ * \param calib_file sensor calibration yaml file path, which will also be saved to record_path
+ * \param record_map_only If true, we only record the map w/o the raw data (images + imu)
+ * \return The real record path
  */
-std::string set_record_path(const std::string& record_path, const std::string& cam_calib_path = "");
+std::string set_record_path(const std::string& record_path,
+                            const std::string& calib_path,
+                            const bool record_map_only);
 /**
  * \brief Set canvas for drawing top down view.
  * \param canvas preallocated cv::Mat CV_8UC3 for drawing. Canvas can be a sub-matrix.
@@ -110,9 +145,10 @@ bool set_top_view_canvas(cv::Mat* canvas, bool clear_canvas_before_plot);
 /**
  * \brief Set canvas for drawing camera view.
  * \param canvas preallocated cv::Mat CV_8UC3 for drawing. Canvas can be a sub-matrix.
+ * \param view_num number of views to show. Can be 1 (only left view) or 2 (both left & right views)
  * \return success or not
  */
-bool set_camera_view_canvas(cv::Mat* canvas);
+bool set_camera_view_canvas(cv::Mat* canvas, int view_num = 1);
 /**
  * \brief Save draw canvas for depth image.
  *        If this is unset, the depth computation will be disabled (which saves ~100% cpu).
@@ -125,19 +161,42 @@ bool set_depth_view_canvas(cv::Mat* canvas);
  * \note Can only enable path follower for either robot control or walking guide.
  * \return True if successful
  */
-bool set_path_follower_robot();
+bool set_path_follower_robot(const XP::NaviParam &navi_param);
 /**
  * \brief Register callback functions for getting walk guide information
  * \param callback the call back function if a new walk guide message is ready
  */
-bool set_path_follower_walk(const XP_TRACKER::GuideMessageCallback& callback);
+bool set_path_follower_walk(const XP::NaviParam &navi_param,
+                            const XP_TRACKER::GuideMessageCallback &callback);
 
 /**
- * \brief Save draw canvas for path follower control image.
+ * TODO(mingyu): Put back descriptions
+ */
+bool set_navigator(std::shared_ptr<XP::Actuator> actuator,
+                   const std::string& navigation_folder,
+                   const XP::NaviParam &navi_param);
+
+/**
+ * TODO(mingyu): Put back descriptions
+ */
+bool set_navigator_trajectory(const std::string &navigation_folder);
+
+/**
+ * TODO(mingyu): Put back descriptions
+ */
+bool set_navigator_mouse_data(const XP::MouseData& mouse_data);
+
+/**
+ * TODO(hangmeng): Put back descriptions
+ */
+bool finish_set_loop_targets();
+
+/**
+ * \brief Save draw canvas for navigation control image.
  * \param canvas preallocated cv::Mat CV_8UC3 for drawing. Canvas can be a sub-matrix.
  * \return success or not
  */
-bool set_path_follower_canvas(cv::Mat* canvas);
+bool set_navi_canvas(cv::Mat* canvas);
 
 bool set_generated_trajectory_file(const std::string& navigation_folder);
 
@@ -170,10 +229,6 @@ bool draw_once();
  */
 bool is_duo_vio_tracker_running(void);
 
-/**
- * \brief Callback function for getting raw imgs
- * left img, right img, timestamp in seconds
- */
 typedef std::function<void(const cv::Mat&, const cv::Mat&, float)> StereoImagesCallback;
 /**
  * \brief Register callback functions for getting raw imgs
@@ -182,10 +237,22 @@ typedef std::function<void(const cv::Mat&, const cv::Mat&, float)> StereoImagesC
  *                 light. This function only works with LI sensor mode
  */
 bool set_stereo_images_callback(const StereoImagesCallback& callback);
+
+/**
+ * \brief Callback function for getting pose, speed, angular speed and feature nums for MAV
+ * \note  do NOT do a large function here as it can potentially block the internal vioCallback function,
+ *        which can impact the tracking performance.
+ */
+typedef std::function<void(const VioState& vio_state)> VioStateCallback;
+/**
+ * \brief Register callback functions for getting vio state
+ */
+bool set_vio_state_callback(const VioStateCallback& callback);
+
 /**
  * \brief Get 2d pose based on mapper result
- * 				If no previous map is loaded, [0, 0] is defined as the initial position of the sensor.
- * 				If a previous map is loaded, [0, 0] and orientation is inherited from the previous map.
+ *        If no previous map is loaded, [0, 0] is defined as the initial position of the sensor.
+ *        If a previous map is loaded, [0, 0] and orientation is inherited from the previous map.
  * \param x A pointer for saving x. X axis is defined as right hand direction of the sensor.
  * \param y A pointer for saving y. Y axis is defined as the frontal direction of the sensor.
  * \param yaw A pointer for saving yaw value. The range of yaw is (-pi, pi].
@@ -197,9 +264,9 @@ bool set_stereo_images_callback(const StereoImagesCallback& callback);
 bool get_tracker_latest_2d_pose(float* x, float* y, float* yaw);
 /**
  * \brief Get 3d pose based on mapper result
- * 				If no previous map is loaded, [0, 0, 0] is defined as the initial position.
+ *        If no previous map is loaded, [0, 0, 0] is defined as the initial position.
  *        Z is up, X is right, Y is front.
- * 				If a previous map is loaded, positon and orientation is inherited from the previous map.
+ *        If a previous map is loaded, positon and orientation is inherited from the previous map.
  * \param W_T_D_4x4 4x4 row matrix. It is the transformation between World and Device,
  *                  following A_T_B definition. W_T_D_4x4 has to be preallocated
  * \return success or not
@@ -218,11 +285,11 @@ bool get_mapper_reloc_xyz_cov(float* cov_3x3);
 
 /**
  * \brief Get 3d pose based on vio result
- * 				If no previous map is loaded, [0, 0, 0] is defined as the initial position.
+ *        If no previous map is loaded, [0, 0, 0] is defined as the initial position.
  *        Z is up, X is right, Y is front.
- * 				If a previous map is loaded, positon and orientation is inherited from the previous map.
+ *        If a previous map is loaded, positon and orientation is inherited from the previous map.
  * \param W_T_D_4x4 4x4 row matrix. It is the transformation between World and Device,
- *									following A_T_B definition. W_T_D_4x4 has to be preallocated.
+ *        following A_T_B definition. W_T_D_4x4 has to be preallocated.
  * \return success or not
  */
 bool get_vio_latest_3d_pose(float* W_T_D_4x4);
@@ -324,5 +391,33 @@ enum MotorDirection {
  * \return success or not
  */
 bool get_direction_to_the_next_land_mark(MotorDirection* motor_direction);
+
+/**
+ * \brief This function that should be called by the live sensor for every stereo frame to
+ *        pass image data into XP tracker
+ * \param img_l left image
+ * \param img_r right image
+ * \param ts_100us timestamp in 100us (the exposure timestamp measured by the clock on sensor)
+ * \param sys_time The chrono time point when the system receive the image data
+ */
+void image_data_callback(const cv::Mat& img_l,
+                         const cv::Mat& img_r,
+                         const float ts_100us,
+                         const std::chrono::time_point<std::chrono::steady_clock>& sys_time);
+
+/**
+ * \brief This function that should be called by the live sensor for every IMU measurment to
+ *        pass IMu data into XP tracker
+ */
+void imu_data_callback(const XPDRIVER::ImuData& imu_data);
+
+/**
+ * \brief Set the callback function that reports the image data rate and imu data rate,
+ *        which will be used when calling draw_once.  This function only takes effect when
+ *        running with a live sensor.
+ */
+typedef std::function<void(float* img_rate, float* imu_rate)> DataRateCallback;
+bool set_data_rate_callback(const DataRateCallback& data_rate_callback);
+
 }  // namespace XP_TRACKER
 #endif  // __XP_TRACKER_H__  // NOLINT

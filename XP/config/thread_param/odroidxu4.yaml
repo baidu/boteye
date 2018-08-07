@@ -1,6 +1,6 @@
 Mapper Thread: 6
 Feature Detection Thread: 4
-Pull LI IMU Thread: 1
+Pull XP IMU Thread: 1
 Image Stream Thread: 2
 Multiframe Consumer Thread: 2
 Drawing Thread: 2

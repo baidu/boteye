@@ -44,15 +44,21 @@
 #define XP_CLOCK_32BIT_MAX_COUNT 0x00000000ffffffff
 
 namespace XPDRIVER {
+struct XpSoftVersion {
+  int soft_ver_major = 0;
+  int soft_ver_minor = 0;
+  int soft_ver_patch = 0;
+};
 namespace XP_SENSOR {
 // address overflow issue
 struct XPSensorSpec {
   char   video_num[20];
-  char   dev_id[100];
+  char   dev_id[100] = "unknown";
   int    RowNum;
   int    ColNum;
   SensorType sensor_type;
-  char   Soft_ver[64];
+  char   Soft_ver_string[64];
+  XpSoftVersion firmware_soft_version;
 };
 #ifdef __linux__  // predefined by gcc
 bool IMU_DataAccess(int fd, XP_20608_data* data_ptr);
@@ -64,34 +70,52 @@ bool set_registers_to_default(int fd,
                               uint32_t* gain_ptr = nullptr);
 bool read_register(int fd, int16_t addr, int16_t* val);
 bool set_register(int fd, int16_t addr, int16_t val);
-bool set_aec_index(int fd, uint32_t aec_index, bool verbose = false);
+bool set_aec_index(int fd, uint32_t aec_index, SensorType sensor_type, bool verbose = false);
 bool set_exp_percentage(int fd, int16_t val, bool verbose = false);
 bool set_gain_percentage(int fd, int16_t val, bool verbose = false);
-int set_auto_exp_and_gain(int fd, bool ae, bool ag);
 bool xp_imu_embed_img(int fd, bool enable);
-struct XPSensorSpec get_XP_sensor_spec(int fd);
+bool get_XP_sensor_spec(int fd, XPSensorSpec* XP_sensor_spec_ptr);
 bool read_soft_version(int fd, char* soft_ver_ptr);
+bool convert_soft_version(const char* current_soft_ver,
+                          XpSoftVersion* ver_unit);
+bool check_min_soft_version(const char* soft_ver, XpSoftVersion* firmware_soft_ver);
 SensorType read_hard_version(int fd);
 void read_deviceID(int fd, char* device_id);
-struct tlc59116_ctl_t {
+
+// Deprecated function
+/*
+int set_auto_exp_and_gain(int fd, bool ae, bool ag);
+*/
+struct IR_ctl_t {
   uint8_t UpdateBit: 1;
-  uint8_t dumpRegister: 1;
-  uint8_t WriteRegister: 1;
-  uint8_t SetCH_on_mode: 1;
-  uint8_t SetCH_pwm_mode: 1;
-  uint8_t : 3;
+  uint8_t Set_infrared_mode: 1;
+  uint8_t Set_structured_mode: 1;
+  uint8_t : 5;
   uint8_t pwm_value;
-  uint16_t channel_value;
+  uint8_t RGB_IR_period;
+  uint8_t tmp8;
 };
+// uint8_t RGB_IR_mode: 1;
+
+struct firmware_ctl_t {
+    uint8_t log_dbg: 1;
+    uint8_t log_info: 1;
+    uint8_t log_dump: 1;
+    uint8_t imu_from_image: 1;
+    uint8_t print_frame_rate: 1;
+    uint8_t tmp_bit: 3;
+    uint8_t tmp8;
+    uint16_t tmp16;
+};
+
 enum infrared_mode_t {
-  off = 0,
-  on = 1,
-  pwm = 2
+  OFF = 0,
+  STRUCTURED = 1,
+  INFRARED = 2,
+  ALL_LIGHT = 3
 };
 const uint32_t infrared_pwm_max = 255;
-bool xp_infrared_ctl(int fd, infrared_mode_t infrared_mode, uint16_t channel_value,
-                     uint8_t pwm_value);
-bool xp_tl59116_dump_register(int fd);
+bool xp_infrared_ctl(int fd, infrared_mode_t infrared_mode, uint8_t pwm_value, uint8_t period);
 #endif  // __linux__
 uint64_t get_timestamp_in_img(const uint8_t* data);
 bool stamp_timestamp_in_img(uint8_t* data, uint64_t time);
@@ -112,21 +136,6 @@ class SharedMemoryReader {
   LPCTSTR Buf_ptr_;
 };
 #endif
-
-// [NOTE] Deprecated class
-class OpencvVideoCap {
- public:
-  explicit OpencvVideoCap(int vid);
-  ~OpencvVideoCap();
-  bool retrive(std::shared_ptr<std::vector<uint8_t>> data_ptr);
-  static const int IMU_DATA_POS = 640 * (480 * 3 - 3) + 0;
-  static const int W = 640;
-  static const int H = 480;
-  static bool copy_to_lr(cv::Mat* img_l_ptr, cv::Mat* img_r_ptr, uint8_t* data);
- protected:
-  cv::VideoCapture cap_;
-  cv::Mat frame_cache_;
-};
 
 class ImuReader {
  public:

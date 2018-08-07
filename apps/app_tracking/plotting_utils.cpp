@@ -18,79 +18,7 @@
 #include <memory>
 #include <algorithm>
 #include <vector>
-PoseDrawer2D::PoseDrawer2D() :
-  scale_(1.0),
-  min_x_(-0.5),
-  min_y_(-0.5),
-  max_x_(0.5),
-  max_y_(0.5) {}
-void PoseDrawer2D::addPose(float x, float y, float alpha) {
-  std::lock_guard<std::mutex> lock(data_io_mutex_);
-  latest_pose_.x = x;
-  latest_pose_.y = y;
-  latest_pose_.alpha = alpha;
-  paths_.push_back(cv::Point2f(x, y));
-  // maintain scaling
-  constexpr float screen_margin = 1;  // m
-  if (x - frameScale_ - screen_margin < min_x_)
-    min_x_ = x - frameScale_ - screen_margin;
-  if (y - frameScale_ - screen_margin < min_y_)
-    min_y_ = y - frameScale_ - screen_margin;
-  if (x + frameScale_ + screen_margin > max_x_)
-    max_x_ = x + frameScale_ + screen_margin;
-  if (y + frameScale_ + screen_margin> max_y_)
-    max_y_ = y + frameScale_ + screen_margin;
-  scale_ = std::min(imageSize / (max_x_ - min_x_), imageSize / (max_x_ - min_y_));
-}
-bool PoseDrawer2D::drawTo(cv::Mat* img_ptr) {
-  if (img_ptr == nullptr) return false;
-  cv::Mat& img = *img_ptr;
-  // Clear image
-  img.setTo(cv::Scalar(0, 0, 0));
-  this->drawPath(&img);
-  // draw axes
-  std::lock_guard<std::mutex> lock(data_io_mutex_);
-  const float e_x = sinf(latest_pose_.alpha);
-  const float e_y = cosf(latest_pose_.alpha);
-  // scale_mutex_ is locked in convertToImageCoordinates
-  cv::line(img,
-           convertToImageCoordinates(cv::Point2f(latest_pose_.x, latest_pose_.y)),
-           convertToImageCoordinates(cv::Point2f(latest_pose_.x, latest_pose_.y)
-                                     + cv::Point2f(e_x, e_y) * frameScale_),
-           cv::Scalar(0, 0, 255), 1, CV_AA);
-  return true;
-}
 
-cv::Point2f PoseDrawer2D::convertToImageCoordinates(const cv::Point2f & pointInMeters) {
-  cv::Point2f pt = (pointInMeters - cv::Point2f(min_x_, min_y_)) * scale_;
-  return cv::Point2f(pt.x, imageSize - pt.y);  // reverse y for more intuitive top-down plot
-}
-void PoseDrawer2D::drawPath(cv::Mat* img_ptr) {
-  if (img_ptr == nullptr) {
-    return;
-  }
-  std::lock_guard<std::mutex> lock(data_io_mutex_);
-  if (paths_.empty()) {
-    return;
-  }
-  auto it_path = paths_.begin();
-  auto it_path_next = it_path;
-  it_path_next++;
-  for (; it_path_next !=paths_.end();) {
-    cv::Point2f p0 = convertToImageCoordinates(*it_path);
-    cv::Point2f p1 = convertToImageCoordinates(*it_path_next);
-    cv::Point2f diff = p1-p0;
-    if (diff.dot(diff) < 2.0) {
-      auto it_path_bk = it_path_next;
-      ++it_path_next;
-      paths_.erase(it_path_bk);  // clean short segment
-    } else {
-      cv::line(*img_ptr, p0, p1, cv::Scalar(0, 255, 0), 1, CV_AA);
-      ++it_path;
-      ++it_path_next;
-    }
-  }
-}
 #ifdef HAS_OPENCV_VIZ
 using cv::viz::Viz3d;
 void viz3d_keyboard_cb(const cv::viz::KeyboardEvent& callback,

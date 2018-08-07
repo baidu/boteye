@@ -19,10 +19,25 @@
 
 #include <cstdlib>
 #include <functional>
+#include <chrono>
+#include <cmath>
+
 namespace XP_TRACKER {
 
 /**
- * Position
+ * 2D Position
+ */
+struct V2 {
+  V2() :
+    x(0), y(0) {}
+  V2(const float _x, const float _y) :
+    x(_x), y(_y) {}
+  float x;
+  float y;
+};
+
+/**
+ * 3D Position
  */
 struct V3 {
   V3() :
@@ -47,6 +62,18 @@ struct V4 {
   float z;
   float w;
 };
+/**
+ * Rotation (Euler)
+ */
+struct EulerAngleRPY {
+  EulerAngleRPY() :
+    ea_yaw(0), ea_pitch(0), ea_roll(0) {}
+  EulerAngleRPY(const float _yaw, const float _pitch, const float _roll) :
+    ea_yaw(_yaw), ea_pitch(_pitch), ea_roll(_roll) {}
+  float ea_yaw;
+  float ea_pitch;
+  float ea_roll;
+};
 
 #define V1_LENGTH (sizeof(ServerPktV1) - 2 * sizeof(int32_t))
 struct ServerPktV1 {
@@ -67,19 +94,64 @@ struct ServerPktV1 {
   int32_t trackingStatus;
 };
 
+/**
+  * \brief The state of vio
+  * position [meter]
+  * orientation (euler angle:RPY)[rad]
+  * linear_velocity [meter/s], represent in current camera coordinate
+  * angular_velocity [rad/s], represent in current camera coordinate
+  * feature_number (matched feature for current frame) 
+ */
+// [note] the pose is the transformation between World and Device
+// the world coordinate is: z-up, x-right, y-front
+struct VioState {
+  VioState() :
+    matched_feature_number(0) {
+  }
+  VioState& operator=(const VioState& state_) {
+    position.x = state_.position.x;
+    position.y = state_.position.y;
+    position.z = state_.position.z;
+    orientation.ea_yaw = state_.orientation.ea_yaw;
+    orientation.ea_pitch = state_.orientation.ea_pitch;
+    orientation.ea_roll = state_.orientation.ea_roll;
+    linear_velocity.x = state_.linear_velocity.x;
+    linear_velocity.y = state_.linear_velocity.y;
+    linear_velocity.z = state_.linear_velocity.z;
+    angular_velocity.x = state_.angular_velocity.x;
+    angular_velocity.y = state_.angular_velocity.y;
+    angular_velocity.z = state_.angular_velocity.z;
+    matched_feature_number = state_.matched_feature_number;
+    timestamp_sec = state_.timestamp_sec;
+    timestamp_nsec = state_.timestamp_nsec;
+  }
+  V3 position;
+  EulerAngleRPY orientation;
+  V3 linear_velocity;
+  V3 angular_velocity;
+  int matched_feature_number;
+  // timestamp
+  uint32_t timestamp_sec;
+  uint32_t timestamp_nsec;
+};
 
 // TODO(mingyu): Add UDP signatures for GuideMessage and ServerPktV1
-// distance [meter]
-// degree [-180 to 180 degree]
-// With Z:up
-// degree > 0: Turn left
-// degree < 0: Turn right
+/**
+ * distance [meter]
+ * degree [-180 to 180 degree]
+ * With Z:up
+ * degree > 0: Turn left
+ * degree < 0: Turn right
+ */
 struct GuideMessage {
   enum Status {
     FAIL = 0,
     OK = 1,
     STOP = 2,
     FINISH = 3,
+    LOST = 4,
+    OBSTACLE_AVOID = 5,
+    MANUAL = 6
   };
   GuideMessage() :
     distance(0), degree(0), vel(0), angular_vel(0), status(FAIL) {
@@ -96,19 +168,97 @@ struct GuideMessage {
   float angular_vel;
   Status status;  // enum should be stored as int32_t
 };
+
+// TODO(hangmeng): unify the data structure with Xiaodu Group
+// TODO(hangmeng): fix the comments
+// TODO(hangmeng): need coordinate transformation
+/**
+ * x: forward [meter]
+ * y: left [meter]
+ * yaw [-M_PI to M_PI]
+ */
+struct WheelOdomMessage {
+  enum Status {
+    FAIL = 0,
+    OK = 1,
+    CLEAR = 2  // set wheel odometry to zero
+  };
+  WheelOdomMessage() :
+    x(0), y(0), yaw(0), linear_vel(0), angular_vel(0), status(FAIL) {
+  }
+  explicit WheelOdomMessage(const Status stat) :
+    x(0), y(0), yaw(0), linear_vel(0), angular_vel(0), status(stat) {
+  }
+  WheelOdomMessage(const float input_x, const float input_y, const float input_yaw,
+                   const float input_linear_vel, const float input_angular_vel) :
+    x(input_x), y(input_y), yaw(input_yaw),
+    linear_vel(input_linear_vel), angular_vel(input_angular_vel),
+    status(FAIL) {
+  }
+  float x;
+  float y;
+  float yaw;
+  float linear_vel;
+  float angular_vel;
+  // TODO(hangmeng): currently not used
+  Status status;
+};
+
+/**
+ * position.y: forward [meter]
+ * position.x: right [meter]
+ * yaw [-M_PI to M_PI], default: 0.5 M_PI, because the heading is towards +y
+ */
+// TODO(Mingyu): Move this *state* to data_atom/basic_datatype.h ??
+// TODO(Mingyu): Unify the odometry convention and probably do the transform
+//               when fusing odometry pose w/ SLAM pose.
+struct WheelOdomState {
+  WheelOdomState() :
+    yaw(0.5 * M_PI), linear_velocity(0), angular_velocity(0),
+    ts(std::chrono::steady_clock::now()) {
+  }
+  WheelOdomState& operator=(const WheelOdomState& state_) {
+    position.x = state_.position.x;
+    position.y = state_.position.y;
+    yaw = state_.yaw;
+    linear_velocity = state_.linear_velocity;
+    angular_velocity = state_.angular_velocity;
+    ts = state_.ts;
+  }
+  void reset(const std::chrono::steady_clock::time_point& cur_ts) {
+    position.x = 0;
+    position.y = 0;
+    yaw = 0.5 * M_PI;
+    linear_velocity = 0;
+    angular_velocity = 0;
+    ts = cur_ts;
+  }
+
+  V2 position;  // meter
+  float yaw;  // rad
+  float linear_velocity;  // m/s
+  float angular_velocity;  // rad/s
+  // TODO(hangmeng): unify the time with other sensor data like VIO
+  std::chrono::steady_clock::time_point ts;
+};
+
 /**
  * \brief Callback function for getting walk guide data
  * \param guide_message The guide message produced by SDK
  */
-typedef std::function<void(const XP_TRACKER::GuideMessage& guide_message)> GuideMessageCallback;
+typedef
+std::function<void(const XP_TRACKER::GuideMessage& guide_message)> GuideMessageCallback;
+typedef
+std::function<bool(XP_TRACKER::WheelOdomMessage * wheel_odom_message)> WheelOdomMessageCallback;
 
 // UDP message encoding obstacle information.
 // The image is divided into a 2x3 grid and nonzero means obstacle.
 struct ObstacleMessage {
   int obstacle_block[6];
 };
-// command sent by a host and recieved by tracking
-/*
+
+/**
+ * \brief Command sent by a host and recieved by tracking
  * since udp only receives bytes,
  * it's very likely to make a mistake where some date received by UDP is erroneously converted into
  * a packet that the data is actually not.
