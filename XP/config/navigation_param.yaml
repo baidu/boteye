@@ -21,7 +21,7 @@ Navigation:
   grid_cell_size_y: 200 # local grid size in Y dimension
   grid_resolution: 0.05 # local grid resolution (m)
   hierarchical_infalte: true # use multiple inflate radius: 1.2, 1.1, 1.0, 0.9 times of device radius
-  safe_obstacle_distance: 0.7 # obstacle closer than the value will trigger obstacle avoid (m)
+  safe_obstacle_distance: 0.3 # if the dist between device_radius and obstacle is less than the thresh, OA will be triggered (m)
   valid_obstacle_dist_range: 2.0 # use obstacles closer than this distance as input of navigation logic (m)
   valid_obstacle_angle_range: 1.309 # use obstacles in this horizontal angle range as input of navigation logic (rad)
   virtual_clear_range: 3.0 # Used to clear obstacles when no obstacle is detected on a ray
