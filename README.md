@@ -1,5 +1,5 @@
 ## boteye: Baidu Robotic Vision SDK ##
-![boteye](https://ibb.co/eKbKYK)
+![boteye](https://preview.ibb.co/eojTSe/page_1.png)
 
 For details, please refer to [boteye Wiki](https://github.com/baidu/boteye/wiki).
 
