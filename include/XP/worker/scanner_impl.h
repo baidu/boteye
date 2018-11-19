@@ -1,0 +1,125 @@
+/******************************************************************************
+ * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *****************************************************************************/
+
+#ifndef XP_INCLUDE_XP_WORKER_SCANNER_IMPL_H_
+#define XP_INCLUDE_XP_WORKER_SCANNER_IMPL_H_
+
+#ifdef HAS_ROS
+#include <ros/ros.h>
+#include <sensor_msgs/LaserScan.h>
+#include <nav_msgs/Odometry.h>
+#include <geometry_msgs/Twist.h>
+#include <diagnostic_msgs/DiagnosticArray.h>
+#endif
+
+#ifdef HAS_RPLIDAR
+#include <rplidar.h>
+#endif  // HAS_RPLIDAR
+
+#ifdef HAS_LSLIDAR
+#include <ls01b_driver.h>
+#include <ls01d_driver.h>
+#endif  // HAS_LSLIDAR
+
+#include <XP/worker/scanner.h>
+#include <XP/helper/param_internal.h>  // for NaviParam
+#include <string>
+#include <chrono>
+
+
+// single thread
+class NullScanner : public Scanner {
+ public:
+  bool init() override;
+  void updateScan() override;
+};
+
+#ifdef HAS_RPLIDAR
+class RPLidarScanner : public Scanner {
+ public:
+  explicit RPLidarScanner(const XP::NaviParam::LidarConfig_t &lidar_param);
+  ~RPLidarScanner() override;
+
+  bool init() override;
+  bool startScan() override;
+  bool stopScan() override;
+  bool dispose() override;
+  bool checkHealth() override;
+  void updateScan() override;
+
+ protected:
+  void createDriver();
+  bool connectDriver();
+
+  const char * serial_dev_;
+  uint32_t baudrateArray_[2];
+  uint32_t baudrate_;
+  rplidar_response_device_info_t devinfo_;
+
+  rp::standalone::rplidar::RPlidarDriver * device_;
+};
+#endif  // HAS_RPLIDAR
+
+#ifdef HAS_LSLIDAR
+class LSLidarScanner : public Scanner {
+ public:
+  explicit LSLidarScanner(const XP::NaviParam::LidarConfig_t &lidar_param);
+  ~LSLidarScanner() override;
+
+  bool init() override;
+  bool startScan() override;
+  bool stopScan() override;
+  bool dispose() override;
+  void updateScan() override;
+
+ protected:
+  const char * serial_dev_;
+
+  io_driver* device_ls01d_;
+  lidar_driver* device_ls01b_;
+};
+#endif  // HAS_LSLIDAR
+
+#ifdef HAS_ROS
+// single thread
+class RosScanner : public Scanner {
+ public:
+  explicit RosScanner(const XP::NaviParam::LidarConfig_t &lidar_param);
+  ~RosScanner() override;
+  bool init() override;
+  bool startScan() override;
+  bool stopScan() override;
+  bool dispose() override;
+  bool checkHealth() override;
+  void updateScan() override;
+
+ protected:
+  void scanCallback(const sensor_msgs::LaserScanConstPtr &scan);
+  void diagCallback(const diagnostic_msgs::DiagnosticArrayConstPtr &diag);
+
+
+  bool scan_first_;
+  int64_t ros_header_time_nanosec_;
+  std::chrono::time_point<std::chrono::steady_clock> scan_sample_start_tp_;
+  bool is_lidar_healthy_;
+  ros::Subscriber diag_sub_;
+  ros::Subscriber scan_sub_;
+  const std::string diag_topic_;
+  const std::string scan_topic_;
+};
+#endif
+
+#endif  // XP_INCLUDE_XP_WORKER_SCANNER_IMPL_H_

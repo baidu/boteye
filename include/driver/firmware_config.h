@@ -22,7 +22,7 @@
 
 // Define the minimum supported firmware version number
 #define MIN_FIRMWARE_VERSION_MAJOR 0
-#define MIN_FIRMWARE_VERSION_MINOR 8
-#define MIN_FIRMWARE_VERSION_PATCH 5
+#define MIN_FIRMWARE_VERSION_MINOR 9
+#define MIN_FIRMWARE_VERSION_PATCH 8
 
 #endif  // INCLUDE_DRIVER_FIRMWARE_CONFIG_H_

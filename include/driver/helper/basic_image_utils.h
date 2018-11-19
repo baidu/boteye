@@ -71,6 +71,10 @@ class AutoWhiteBalance {
     m_use_preset_ = false;
   }
 
+  inline void setWhiteBalancePresetMode(void) {
+    m_use_preset_ = true;
+  }
+
  private:
   void compute_RGB_mean(const cv::Mat& rgb_img_,
                                uint32_t* ptr_r_mean,

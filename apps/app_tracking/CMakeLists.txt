@@ -17,6 +17,7 @@ add_executable(${PROJECT_NAME}
  plotting_utils.h
  plotting_utils.cpp
  app_tracking.cpp
+ xp_driver_interface.cc
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -29,9 +30,10 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 target_link_libraries(${PROJECT_NAME}
  ${GLOG_LIBRARY}
  ${GFLAGS_LIBRARY}
- ${XP_LIBRARY}
+ ${XP_LIBRARIES}
  ${XP_DRIVER_LIBRARY}
  ${OpenCV_LIBRARIES}
+ ${Boost_LIBRARIES}
 )
 
 # Set recognition option
@@ -57,6 +59,7 @@ add_executable(pose_receiver
 )
 
 target_include_directories(pose_receiver PUBLIC
+ ${Eigen_INCLUDE_DIR}
  ${CMAKE_CURRENT_SOURCE_DIR}
  ${XP_INCLUDE_DIR}  # for pose_packet.h
  ${OpenCV_INCLUDE_DIRS}
@@ -64,7 +67,7 @@ target_include_directories(pose_receiver PUBLIC
 target_link_libraries(pose_receiver
  ${GLOG_LIBRARY}
  ${GFLAGS_LIBRARY}
- ${XP_LIBRARY}
+ ${XP_LIBRARIES}
  ${OpenCV_LIBRARIES}
 )
 # ============================================
@@ -75,6 +78,7 @@ add_executable(guide_receiver
 )
 
 target_include_directories(guide_receiver PUBLIC
+ ${Eigen_INCLUDE_DIR}
  ${CMAKE_CURRENT_SOURCE_DIR}
  ${XP_INCLUDE_DIR}  # for pose_packet.h
  /usr/local/include

@@ -18,6 +18,9 @@
 #define XP_INCLUDE_XP_WORKER_ACTUATOR_H_
 
 #include <XP/app_api/pose_packet.h>  // for GuideMessageCallback and GuideMessage
+#include <navigation/navigation_type.h>  // for ScanMessage
+#include <XP/helper/param_internal.h>  // For NaviParam
+#include <XP/worker/scanner.h>
 #include <thread>
 #include <mutex>
 
@@ -27,34 +30,44 @@ namespace XP {
 // into robot-platform specific control signals
 class Actuator {
  public:
-  Actuator() {}
+  Actuator(const NaviParam::ActuatorConfig_t &actuator_param,
+           const NaviParam::LidarConfig_t &lidar_param);
   virtual ~Actuator() {}
 
   virtual bool init();
-  virtual bool run() = 0;
-  virtual bool update() = 0;  // Update the sensors on this actuator
+  virtual bool run();
+  virtual void update() = 0;  // Update the sensors on this actuator
   virtual bool control(const XP_TRACKER::GuideMessage& guide_message) = 0;
   virtual bool stopActProcess();
   virtual bool allowMoving(const bool allow_moving);
-  virtual bool isInit() const { return is_init_; }
-
+  virtual bool isInit();
   // The getters actually get the *cached* sensor data of the actuator.
-  // The base class implementation returns false for all sensors.
-  virtual bool getUltrasoundObstacle() { return false; }
-  // The wheel odometry reading: +positive means forward for both left & right readings
-  virtual bool getWheelEncoders_lr(int* l_reading, int* r_reading) { return false; }
-  // TODO(hangmeng): re-difine the wheel odom's data structure
-  // which will be different from WheelOdomMessage including velocity data
-  virtual bool getWheelOdom(XP_TRACKER::WheelOdomState* wheel_odom_state) { return false; }
+  virtual bool getUltrasoundObstacle();
+
+  virtual bool getWheelOdom(XP_TRACKER::WheelOdomState* wheel_odom_state);
+  // Read lidar message
+  virtual bool getScanMessage(Navigation::ScanMessage* scan);
+  // Lidar obstacle estimate
+  virtual bool getLidarObstacle();
 
  protected:
+  // The wheel odometry reading: +positive means forward for both left & right readings
+  virtual bool getWheelEncoders_lr(int *l_reading, int *r_reading);
+  // Worker
+  std::unique_ptr<Scanner> scanner_;
+
   bool is_init_ = false;
   bool is_running_ = false;
 
   // Mutex to protect the actuator sensor data I/O
+  // TODO(hangmeng): how should we use this mutex: lock everywhere in the class
+  // or use lock() & unlock() interface to lock actuator outside
   std::mutex actuator_sensor_lock_;
   XP_TRACKER::WheelOdomState wheel_odom_state_;
+  Navigation::ScanMessage scan_state_;
   bool ultrasound_obstacle_ = false;
+  bool lidar_obstacle_ = false;
+  // lr_readings need not be locked: already single thread
   int l_reading_ = 0;
   int r_reading_ = 0;
 };
@@ -62,10 +75,12 @@ class Actuator {
 // This actuator sends out control signals via UDP or serial port
 class SampleActuator : public Actuator {
  public:
-  SampleActuator(const XP_TRACKER::GuideMessageCallback& g_callback,
+  SampleActuator(const XP::NaviParam::ActuatorConfig_t &actuator_param,
+                 const XP::NaviParam::LidarConfig_t &lidar_param,
+                 const XP_TRACKER::GuideMessageCallback& g_callback,
                  const XP_TRACKER::WheelOdomMessageCallback& wo_callback);
   bool run();
-  bool update();
+  void update();
   bool control(const XP_TRACKER::GuideMessage& guide_message) override;
   bool stopActProcess() override;
   bool getWheelOdom(XP_TRACKER::WheelOdomState* wheel_odom_state) override;

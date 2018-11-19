@@ -17,5 +17,6 @@ target_link_libraries(${PROJECT_NAME}
  ${GLOG_LIBRARY}
  ${GFLAGS_LIBRARY}
  ${Boost_LIBRARIES}
- ${XP_LIBRARY}
+ ${XP_LIBRARIES}
+ ${XP_DRIVER_LIBRARY}
 )

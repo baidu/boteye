@@ -21,6 +21,7 @@
 #include <opencv2/imgproc.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/lexical_cast.hpp>
+#include <driver/XP_sensor_driver.h>
 #include <XP/helper/tag_detector.h>  // For april tag detector
 #include <XP/helper/param.h>  // For load / save calib param
 #include <XP/util/calibration_utils.h>
@@ -34,13 +35,14 @@
 #include <set>
 #include <chrono>
 #include <limits>
+#include <memory>
 
 using std::cout;
 using std::endl;
 using std::vector;
 using namespace boost::filesystem;  // NOLINT
 DEFINE_string(sensor_type,
-              "UNKNOWN", "XP or XP2 or XP3 or FACE XPIRL or XPIRL2 or XPIRL3 or UDP (receiving)");
+              "UNKNOWN", "XP or XP2 or XP3 or FACE XPIRL or XPIRL2 or XPIRL3 or XPIRL3_A");
 DEFINE_string(device_id, "", "device id of duo camera");
 DEFINE_string(record_path, "", "folder containing l and r folders");
 DEFINE_string(img_suffix, "png", "image suffix");
@@ -48,12 +50,13 @@ DEFINE_bool(show_reproj, false, "whether or not show image with points in a debu
 DEFINE_bool(show_det, false, "whether or not show image with tag detection");
 DEFINE_bool(show_coverage, false, "whether or not show point coverage w/o running calibration");
 DEFINE_bool(fish_eye_model, false, "whether or not use the fish eye model");
-DEFINE_int32(valid_radius, 360,
-             "The radius in pixel to check the point coverage from the pinhole center. "
-             "Suggested value: 360 for 120 deg FOV and 220 for 170 deg FOV.");
 DEFINE_bool(no_distribution_check, false, "disable point distribution check");
+DEFINE_double(valid_ratio, 0.95,
+              "The valid ratio (diagonal direction) to check the point coverage from the image "
+              "center. Suggested value: 0.95 for 120 deg FOV and 0.55 for 170 deg FOV.");
 DEFINE_double(min_ratio, 0.4,
               "The required minimum ratio of detected points over the average per grid");
+DEFINE_double(min_tag_pix, 10.0, "The required minimal edge size of detected tag in pixel");
 DEFINE_double(square_size, -1, "length of the side of one tag");
 DEFINE_double(gap_square_ratio, 0.25, "length of the gap between tags");  // april tag pattern
 DEFINE_string(load_calib, "", "calib file to load (old cv format)");
@@ -67,45 +70,11 @@ DEFINE_int32(display_timeout, 500, "how many millisec does a window display. 0 i
 DEFINE_int32(dist_order, 8, "8 (k1 k2 0 0 k3 k4 k5 k6) or 6 (k1 k2 0 0 k3) or 4 (k1 k2 p1 p2)"
              " or 2 (k1 k2)");
 DEFINE_bool(single_cam_mode, false, "Only calibrate one camera.");
+DEFINE_bool(skip_save_to_sensor, false, "Skip downloading calib file to sensor");
+DEFINE_string(dev_name, "", "which dev to open. Empty enables auto mode");
 
-// [NOTE] Assume 5x7 april tag is used.
-const int kFullCorners = 5 * 7 * 4;
-cv::Point3f id2coordinate(const int det_id) {
-  // compute 3d position
-  // tag corner ids are
-  // 1 2
-  // 4 3
-  // board is 5x7
-  // Arrangement of tag ids is
-  // 00 01 02 03 04 05 06
-  // 24 25 26 27 28 29 30
-  // 48 49 50...
-  // 72 ..
-  // 96 ..             102
-  cv::Point3f coordinate;
-  const int tag_id = det_id / 10;
-  const int col_id = tag_id % 24;
-  const int row_id = tag_id / 24;
-  CHECK_LT(col_id, 7) << "tag_id " << tag_id << " does not belong to the tag board";
-  const int corner_id = det_id % 10;
-  // std::cout << tag_id << ":" << corner_id << " -> " << corner_positions[i] << std::endl;
-  const float x_upper_left =
-      col_id * (FLAGS_square_size + FLAGS_square_size * FLAGS_gap_square_ratio);
-  const float y_upper_left =
-      row_id * (FLAGS_square_size + FLAGS_square_size * FLAGS_gap_square_ratio);
-  coordinate.x = x_upper_left;
-  coordinate.y = y_upper_left;
-  coordinate.z = 0;
-  CHECK_GE(corner_id, 1);
-  CHECK_LE(corner_id, 4);
-  if (corner_id == 2 || corner_id == 3) {
-    coordinate.x += FLAGS_square_size;
-  }
-  if (corner_id == 3 || corner_id == 4) {
-    coordinate.y += FLAGS_square_size;
-  }
-  return coordinate;
-}
+constexpr int kMinReqCornerNumber = 70;  // 0.5 * (5 * 7 tags * 4 corners each)
+std::unique_ptr<XPDRIVER::XpSensorMultithread> g_xp_sensor_ptr;
 
 int main(int argc, char** argv) {
   google::InitGoogleLogging(argv[0]);
@@ -196,30 +165,34 @@ int main(int argc, char** argv) {
         // Sanity check. Make sure all images are of the same size.
         CHECK_EQ(img_size.width, img_gray.cols);
         CHECK_EQ(img_size.height, img_gray.rows);
+
+        // The tag detector will ignore any detected tags that have edges smaller than
+        // the specified FLAGS_min_tag_pix
         std::vector<cv::KeyPoint> kps;
-        int det_num = april_tag_detector.detect(img_gray, &kps);
+        int det_num = april_tag_detector.detect(img_gray, &kps, FLAGS_min_tag_pix);
         std::vector<cv::Point2f> corner_positions(kps.size());
-        std::vector<int> corner_ids(kps.size());
+        std::vector<int> trace_ids(kps.size());
         for (size_t i = 0; i < kps.size(); ++i) {
           corner_positions[i] = kps[i].pt;
-          corner_ids[i] = kps[i].class_id;
+          trace_ids[i] = kps[i].class_id;
         }
-        corner_ids_all_lr[lr].push_back(corner_ids);
-        /*
-        std::cout << "detected " << det_num << " tags from "
-                  << it_path.filename() << " size " << img_size << std::endl;
-        */
+        corner_ids_all_lr[lr].push_back(trace_ids);
+        VLOG(0) << "detected " << det_num << " tags from "
+                << it_path.filename() << " size " << img_size << std::endl;
+
         if (det_num == 0) {
           ++img_counter;
           continue;
         }
+
         detected_corners_all_img_id.push_back(img_counter);
         ++img_counter;
-        // vector<cv::Point2f> detected_corners(det_num * 4);
         vector<cv::Point3f> corresponding_board_coordinates(det_num * 4);
-        CHECK_EQ(det_num * 4, corner_ids.size());
-        for (size_t i = 0; i < corner_ids.size(); i++) {
-          corresponding_board_coordinates[i] = id2coordinate(corner_ids[i]);
+        CHECK_EQ(det_num * 4, trace_ids.size());
+        for (size_t i = 0; i < trace_ids.size(); i++) {
+          corresponding_board_coordinates[i] = XP::id2coordinate_36h11(trace_ids[i],
+                                                                       FLAGS_square_size,
+                                                                       FLAGS_gap_square_ratio);
           // shift detection result
           corner_positions[i].x -= 0.5;
           corner_positions[i].y -= 0.5;
@@ -252,6 +225,10 @@ int main(int argc, char** argv) {
 
   // Check point coverage
   bool point_coverage_ok = true;
+  const int valid_radius_pixel =
+      sqrt(img_size.width * img_size.width + img_size.height * img_size.height) * 0.5
+      * FLAGS_valid_ratio;
+
   if (!FLAGS_no_distribution_check) {
     cv::Mat det_img(img_size.height, img_size.width * camera_max_index, CV_8UC3);
     det_img.setTo(cv::Vec3b(0, 0, 0));
@@ -263,7 +240,7 @@ int main(int argc, char** argv) {
       if (XP::check_grid_point_density(detected_corners_all,
                                        img_size,
                                        min_ratio,
-                                       FLAGS_valid_radius,
+                                       valid_radius_pixel,
                                        cv::Point2f(img_size.width / 2, img_size.height / 2),
                                        true /*verbose*/,
                                        &det_img_this)) {
@@ -414,7 +391,7 @@ int main(int argc, char** argv) {
           if (!XP::check_grid_point_density(reproj_corners_this_exp,
                                             img_size,
                                             FLAGS_min_ratio,
-                                            FLAGS_valid_radius,
+                                            valid_radius_pixel,
                                             cv::Point2f(K_ransac.at<double>(0, 2),
                                                         K_ransac.at<double>(1, 2)),
                                             true /*verbose*/)) {
@@ -743,7 +720,8 @@ int main(int argc, char** argv) {
         CHECK_EQ(corner_ids_r.size(), det_corners_r.size());
 
         // Don't bother to check matching if either one view has too few corners
-        if (corner_ids_l.size() < kFullCorners / 2 || corner_ids_r.size() < kFullCorners / 2) {
+        if (corner_ids_l.size() < kMinReqCornerNumber ||
+            corner_ids_r.size() < kMinReqCornerNumber) {
           continue;
         }
         DetectedCorners matched_corners_l;
@@ -762,12 +740,14 @@ int main(int argc, char** argv) {
           if (found) {
             matched_corners_l.push_back(det_corners_l[it_l]);
             matched_corners_r.push_back(det_corners_r[it_r]);
-            matched_3d_coords.push_back(id2coordinate(corner_id));
+            matched_3d_coords.push_back(XP::id2coordinate_36h11(corner_id,
+                                                                FLAGS_square_size,
+                                                                FLAGS_gap_square_ratio));
           }
         }
         CHECK_EQ(matched_corners_l.size(), matched_corners_r.size());
         CHECK_EQ(matched_corners_l.size(), matched_3d_coords.size());
-        if (matched_3d_coords.size() > kFullCorners / 2) {
+        if (matched_3d_coords.size() > kMinReqCornerNumber) {
           stereo_calib_2dcorners_lr[0].push_back(matched_corners_l);
           stereo_calib_2dcorners_lr[1].push_back(matched_corners_r);
           stereo_calib_3d_coordinates.push_back(matched_3d_coords);
@@ -824,6 +804,25 @@ int main(int argc, char** argv) {
     res_debug_imgs[lr].copyTo(reproj_img(cv::Rect(lr * img_size.width, 0,
                                                   img_size.width, img_size.height)));
   }
+
+  // Check if we're connecting to a XP sensor
+  bool connected_to_sensor = false;
+  g_xp_sensor_ptr.reset(new XPDRIVER::XpSensorMultithread(FLAGS_dev_name,
+                                                          true, /* auto_gain*/
+                                                          false /*imu_from_image*/));
+  if (g_xp_sensor_ptr->init()) {
+    connected_to_sensor = true;
+    VLOG(0) << "XpSensorMultithread init succeeded!";
+    // Overwrite the sensor type flag to the value read from sensor.
+    XPDRIVER::SensorType sensor_type;
+    if (g_xp_sensor_ptr->get_sensor_type(&sensor_type)) {
+      std::string sensor_type_str = XPDRIVER::SensorName[static_cast<uint8_t>(sensor_type)];
+      if (sensor_type_str != FLAGS_sensor_type) {
+        std::cout << "Overwrite sensor type to " << sensor_type_str << " (read from sensor)!!!\n";
+      }
+    }
+  }
+
   if (FLAGS_sensor_type == "UNKNOWN" ||
       FLAGS_sensor_type == "FACE") {
     duo_calib_param.sensor_type = XP::DuoCalibParam::SensorType::UNKNOWN;
@@ -839,6 +838,8 @@ int main(int argc, char** argv) {
     duo_calib_param.sensor_type = XP::DuoCalibParam::SensorType::XPIRL2;
   } else if (FLAGS_sensor_type == "XPIRL3") {
     duo_calib_param.sensor_type = XP::DuoCalibParam::SensorType::XPIRL3;
+  } else if (FLAGS_sensor_type == "XPIRL3_A") {
+    duo_calib_param.sensor_type = XP::DuoCalibParam::SensorType::XPIRL3_A;
   } else {
     LOG(ERROR) << "Unsupport sensor type";
     duo_calib_param.sensor_type = XP::DuoCalibParam::SensorType::UNKNOWN;
@@ -862,22 +863,32 @@ int main(int argc, char** argv) {
     if (!duo_calib_param.WriteToYaml(FLAGS_save_calib_yaml)) {
       LOG(ERROR) << "Save to " << FLAGS_save_calib_yaml << " failed";
     }
-    if (FLAGS_sensor_type == "XPIRL3" || FLAGS_sensor_type == "XPIRL2") {
-      XP::DuoCalibParam duo_calib_param_ir = duo_calib_param;
-      for (int i = 0; i < 2; i++) {
-        duo_calib_param_ir.Camera.cameraK_lr[i](0, 0) /= 2;
-        duo_calib_param_ir.Camera.cameraK_lr[i](0, 2) /= 2;
-        duo_calib_param_ir.Camera.cameraK_lr[i](1, 1) /= 2;
-        duo_calib_param_ir.Camera.cameraK_lr[i](1, 2) /= 2;
+  }
+
+  if (!FLAGS_skip_save_to_sensor) {
+    bool ok = true;
+    if (!connected_to_sensor) {
+      std::cout << "No XP sensor connected.  Skip saving calib to sensor\n";
+      ok = false;
+    } else {
+      std::string calib_string_src = "";
+      duo_calib_param.WriteToString(&calib_string_src);
+      g_xp_sensor_ptr->store_calib_to_sensor(calib_string_src);
+      // Sanity check
+      std::string calib_str = "";
+      if (!g_xp_sensor_ptr->get_calib_from_sensor(&calib_str)) {
+        LOG(ERROR) << "Fail to read calib from sensor";
+        ok = false;
+      } else {
+        if (calib_str != calib_string_src) {
+          LOG(ERROR) << "Sanity check failed: The calib string read from sensor "
+                     << "does NOT match what we store!";
+          ok = false;
+        }
       }
-      duo_calib_param_ir.Camera.img_size /= 2;
-      boost::filesystem::path calib_path(FLAGS_save_calib_yaml);
-      std::string ir_calib_path = calib_path.parent_path().string()
-                                  + "/ir_" + calib_path.filename().string();
-      std::cout << "save ir calib yaml" << std::endl;
-      if (!duo_calib_param_ir.WriteToYaml(ir_calib_path)) {
-        LOG(ERROR) << "Save to " << FLAGS_save_calib_yaml << " failed";
-      }
+    }
+    if (ok) {
+      std::cout << "Successfully stored calib to sensor\n";
     }
   }
   cv::imwrite(reproj_filename, reproj_img);

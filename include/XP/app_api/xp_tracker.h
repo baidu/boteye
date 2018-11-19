@@ -156,18 +156,6 @@ bool set_camera_view_canvas(cv::Mat* canvas, int view_num = 1);
  * \return success or not
  */
 bool set_depth_view_canvas(cv::Mat* canvas);
-/**
- * \brief Enable the path follower for robot control (EAI dashgo)
- * \note Can only enable path follower for either robot control or walking guide.
- * \return True if successful
- */
-bool set_path_follower_robot(const XP::NaviParam &navi_param);
-/**
- * \brief Register callback functions for getting walk guide information
- * \param callback the call back function if a new walk guide message is ready
- */
-bool set_path_follower_walk(const XP::NaviParam &navi_param,
-                            const XP_TRACKER::GuideMessageCallback &callback);
 
 /**
  * TODO(mingyu): Put back descriptions
@@ -187,7 +175,30 @@ bool set_navigator_trajectory(const std::string &navigation_folder);
 bool set_navigator_mouse_data(const XP::MouseData& mouse_data);
 
 /**
- * TODO(hangmeng): Put back descriptions
+ * set navigator dest waypoint.
+ * @param x x of slam coordinate
+ * @param y y of slam coordinate
+ * @return true if set dest xy succeed
+ */
+bool set_navigator_dest_xy(float world_x, float world_y);
+
+/**
+ * set navigator motion mode.
+ * @param navigation motion mode
+ * @return true if set motion mode succeed
+ */
+bool set_navigator_motion_mode(const XP_TRACKER::MotionMode& motion_mode);
+
+/**
+ * set navigator manual motion action.
+ * @param navigation manual motion action
+ * @return true if set manual motion action succeed
+ */
+bool set_navigator_manual_action(const XP_TRACKER::ManualMotionAction& motion_action);
+
+/**
+ * when navigator in loop mode, call this function to finish set loop target waypoints.
+ * @return true if set succedd
  */
 bool finish_set_loop_targets();
 
@@ -197,8 +208,6 @@ bool finish_set_loop_targets();
  * \return success or not
  */
 bool set_navi_canvas(cv::Mat* canvas);
-
-bool set_generated_trajectory_file(const std::string& navigation_folder);
 
 /**
  * @brief send_command_to_mapper send a command to mapper. Check mapper implementation for
@@ -419,5 +428,10 @@ void imu_data_callback(const XPDRIVER::ImuData& imu_data);
 typedef std::function<void(float* img_rate, float* imu_rate)> DataRateCallback;
 bool set_data_rate_callback(const DataRateCallback& data_rate_callback);
 
+/**
+ * \brief The utility function that display the configuration of packages of current binary (libXP)
+ *        as there are quite some functionalities that are enabled / disabled during compile time
+ */
+void print_XP_configuration();
 }  // namespace XP_TRACKER
 #endif  // __XP_TRACKER_H__  // NOLINT

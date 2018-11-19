@@ -8,16 +8,22 @@ FeatDetParam:
   feature_track_length_thresh: 125
   feature_track_dropout_rate: 0.2
 MappingMode:
-  prescan_april_tags_only: false # Only use pre-scanned april tags
+  # feat_type can only be nature, tag, or mixed. "mixed" is a mixture of tag + nature features
+  # Either tag or mixed will enable april tag detection in mapper
+  feat_type: nature
+  # tag_family can only be "36h11" or "25h7" for now. Used when feat_type requires april tag detection
+  tag_family: 36h11
+  # mirror the tag_detection or not, which is a special mode for projected april tag
+  mirror_tag_detection: false
+  # mapper_type can only be normal, reloc_only, or disabled
+  mapper_type: normal
   use_vio_orientation_as_absolute: true  # use vio orientation as absolute reference or not
   # if a rig has high BOW score but larger spatial distance
   # than max_neighour_rig_dis, do not count it as key rig
   # vio does not require cov computed in mapping
   compute_cov: false
   fix_latest_rig_at_ba: true
-  detect_april_tag: false
   modify_prescan_map: false
-  disabled: false
   ignore_feat_on_floor: false
   fix_height_value: false  # this also affects vio tracker
 Mapping:
@@ -52,12 +58,11 @@ Tracking:
   orb_match_thresh_test_ratio: 0.9
   feature_uncertainty: 10
   # Turn on either use_of_id or use_april_tag will force vio config matchWithId to true
-  imaging_FPS: 999 # use the fastest image rate (25Hz for XP cam)
-  aec_index: 100  # [0 to 167]
   use_of_id: true
   undistort_before_vio: false
   use_april_tag: false
   slave_det: direct # epi or OF or direct
+  negative_image: false  # Negative images at the beginning of the tracking pipeline
 Reloc:
   min_reloc_match_score: 1.175494e-38
   min_3d_2d_num: 25
@@ -80,6 +85,19 @@ Depth:
   depth_confidence: 0.2
   run_dense_stereo_freq: 10 # How often do we run left and right image dense matching
   camera_to_floor_height: 0.5 # Only used in dense mapping mode. To remove floor
+  filter_type: binning # Visual depth filter type: binning, convolution(only used in RL control mode)
   use_stereo_sgbm: true  # stereo sgbm provides denser depth with 3x-5x computation
 Nature:
   gravity: [0, 0, -9.799]
+RosParam:
+  enable_ros_topic: false
+  slam_node: xp_slam
+  mapper_stable_topic: mapper_stable
+  slam_pose_topic: slam_pose
+  depth_image_topic: depth_image
+  slam_frame_id: slam
+  T_AD:  # Used to specify the transformation between pose output frame(A) and sensor frame(D)
+    - [1, 0, 0, 0]
+    - [0, 0, 1, 0]
+    - [0, -1, 0, 1]
+    - [0, 0, 0, 1]

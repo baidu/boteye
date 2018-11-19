@@ -35,6 +35,7 @@ static const WB_PARAM s_wb_param[] = {
   {1.f, 1.f, 1.f},            // XPIRL
   {1.f, 1.f, 1.f},            // XPIRL2
   {1.f, 1.f, 1.f},            // XPIRL3
+  {1.f, 1.f, 1.f},            // XPIRL3_A
 };
 
 }  // namespace XP_SENSOR

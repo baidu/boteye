@@ -17,8 +17,18 @@
 #ifndef XP_INCLUDE_XP_WORKER_ACTUATOR_IMPL_H_
 #define XP_INCLUDE_XP_WORKER_ACTUATOR_IMPL_H_
 
+#ifdef HAS_ROS
+#include <ros/ros.h>
+#include <sensor_msgs/LaserScan.h>
+#include <nav_msgs/Odometry.h>
+#include <geometry_msgs/Twist.h>
+#include <diagnostic_msgs/DiagnosticArray.h>
+#endif
+
 #include <XP/helper/param.h>  // for NaviParam::ActuatorConfig_t
 #include <XP/worker/actuator.h>
+#include <XP/worker/scanner_impl.h>
+#include <Eigen/Core>
 #include <string>
 #include <vector>
 #include <mutex>
@@ -34,17 +44,14 @@ std::string buf_to_string(uint8_t* buf, int start, int end);
 
 class EaiActuator : public Actuator {
  public:
-  explicit EaiActuator(const NaviParam::ActuatorConfig_t& actuator_param);
+  EaiActuator(const NaviParam::ActuatorConfig_t &actuator_param,
+               const NaviParam::LidarConfig_t &lidar_param);
   ~EaiActuator();
 
   bool init() override;
-  bool run();
-  bool update();
+  void update() override;
   bool stopActProcess() override;
   bool control(const XP_TRACKER::GuideMessage& guide_message) override;
-  bool getUltrasoundObstacle() override;
-  bool getWheelEncoders_lr(int* l_reading, int* r_reading) override;
-  bool getWheelOdom(XP_TRACKER::WheelOdomState* wheel_odom_state) override;
   bool updateWheelOdom();
   bool updateWheelEncoders_lr(int *l_reading, int *r_reading);
 
@@ -62,7 +69,7 @@ class EaiActuator : public Actuator {
 
   bool reverse_heading_;  // If true, the heading of KincoActuator is reversed, i.e., XP config
 
-  std::chrono::steady_clock::time_point latest_odom_ts_;
+  std::chrono::steady_clock::time_point latest_odom_tp_;
   int prev_tick_counts_l_;
   int prev_tick_counts_r_;
   float dist_per_tick_;
@@ -71,19 +78,16 @@ class EaiActuator : public Actuator {
 // This actuator controls a Kinco base
 class KincoActuator : public Actuator {
  public:
-  explicit KincoActuator(const NaviParam::ActuatorConfig_t& actuator_param);
+  KincoActuator(const NaviParam::ActuatorConfig_t &actuator_param,
+                const NaviParam::LidarConfig_t &lidar_param);
   ~KincoActuator();
 
   // Due to the serial port nature, it's recommended to use all
   // sendKincoCommand in one thread, i.e., update() and control() in one thread
   bool init() override;
-  bool run();
-  bool update();
+  void update() override;
   bool stopActProcess() override;
   bool control(const XP_TRACKER::GuideMessage& guide_message) override;
-  bool getUltrasoundObstacle() override;
-  bool getWheelEncoders_lr(int* l_reading, int* r_reading) override;
-  bool getWheelOdom(XP_TRACKER::WheelOdomState* wheel_odom_state) override;
 
  public:
   // Dilili desk specific functions
@@ -123,15 +127,23 @@ class KincoActuator : public Actuator {
 
   bool reverse_heading_;  // If true, the heading of KincoActuator is reversed, i.e., XP config
 
-  std::chrono::steady_clock::time_point latest_odom_ts_;
+  std::chrono::steady_clock::time_point latest_odom_tp_;
   int prev_tick_counts_l_;
   int prev_tick_counts_r_;
   float dist_per_tick_;
+
+  float min_valid_scan_dist_;
+  float lidar_obs_dist_thres_;
+  float lidar_obs_angle_thres_;
+
+  const Eigen::Matrix4f T_AL_;
 };
 
 class XiaoduActuator : public SampleActuator {
  public:
-  XiaoduActuator(const XP_TRACKER::GuideMessageCallback& g_callback,
+  XiaoduActuator(const XP::NaviParam::ActuatorConfig_t &actuator_param,
+                 const XP::NaviParam::LidarConfig_t &lidar_param,
+                 const XP_TRACKER::GuideMessageCallback& g_callback,
                  const XP_TRACKER::WheelOdomMessageCallback& wo_callback);
 
   bool run() override;
@@ -151,17 +163,14 @@ class GyroorActuator : public Actuator {
   };
 
  public:
-  explicit GyroorActuator(const NaviParam::ActuatorConfig_t& actuator_param);
+  GyroorActuator(const NaviParam::ActuatorConfig_t &actuator_param,
+                 const NaviParam::LidarConfig_t &lidar_param);
   ~GyroorActuator();
 
   bool init() override;
-  bool run();
-  bool update();
+  void update();
   bool stopActProcess() override;
   bool control(const XP_TRACKER::GuideMessage& guide_message) override;
-  bool getUltrasoundObstacle() override;
-  bool getWheelEncoders_lr(int* l_reading, int* r_reading) override;
-  bool getWheelOdom(XP_TRACKER::WheelOdomState* wheel_odom_state) override;
 
  public:
   bool powerOnSeparateWheels();   // before moving
@@ -189,10 +198,58 @@ class GyroorActuator : public Actuator {
 
   bool reverse_heading_;  // If true, the heading of GyroorActuator is reversed, i.e., XP config
 
-  std::chrono::steady_clock::time_point latest_odom_ts_;
+  std::chrono::steady_clock::time_point latest_odom_tp_;
   int prev_tick_counts_l_;
   int prev_tick_counts_r_;
   float dist_per_tick_;
+
+  float min_valid_scan_dist_;
+  float lidar_obs_dist_thres_;
+  float lidar_obs_angle_thres_;
+
+  const Eigen::Matrix4f T_AL_;
 };
+
+#ifdef HAS_ROS
+  // This actuator controls a ROS base
+class RosActuator : public Actuator {
+ public:
+  RosActuator(const NaviParam::ActuatorConfig_t &actuator_param,
+              const NaviParam::LidarConfig_t &lidar_param);
+  ~RosActuator();
+
+  bool init() override;
+  bool run() override;
+  void update() override;
+  bool stopActProcess() override;
+  bool control(const XP_TRACKER::GuideMessage& guide_message) override;
+
+ private:
+  void odomCallback(const nav_msgs::OdometryConstPtr& odom);
+  void diagCallback(const diagnostic_msgs::DiagnosticArrayConstPtr& diag);
+
+ private:
+  // Worker
+
+
+  // Device related
+  bool odom_first_;
+  float min_valid_scan_dist_;
+  float lidar_obs_dist_thres_;
+  float lidar_obs_angle_thres_;
+  int64_t ros_header_time_nanosec_;
+  XP_TRACKER::WheelOdomState odom_first_state_;
+  std::chrono::time_point<std::chrono::steady_clock> odom_sample_start_tp_;
+  const Eigen::Matrix4f T_AL_;
+  int battery_diag_;
+  const std::string odom_topic_;
+  const std::string diag_topic_;
+  const std::string cmd_topic_;
+  geometry_msgs::Twist cmd_vel_;
+  ros::Publisher cmd_vel_pub_;
+  ros::Subscriber odom_sub_;
+  ros::Subscriber diag_sub_;
+};
+#endif  // HAS_ROS
 }  // namespace XP
 #endif  //  XP_INCLUDE_XP_WORKER_ACTUATOR_IMPL_H_

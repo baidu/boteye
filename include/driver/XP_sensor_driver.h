@@ -37,15 +37,25 @@
 #include <utility>
 #include <vector>
 
+#define XP_CLOCK_32BIT_MAX_COUNT 0x00000000ffffffff
 namespace XPDRIVER {
 
 #ifndef __linux__
 class XpSensorMultithread {
  public:
   // Dummy implementation
+  XpSensorMultithread(const std::string& sensor_type_str,
+                      const bool use_auto_gain,
+                      const bool imu_from_image,
+                      const std::string& dev_name = "",
+                      const std::string& wb_mode = "auto") {}
+  bool init() { return false; }
   bool run() { return false; }
   bool stop() { return false; }
   bool get_sensor_deviceid(std::string* device_id) { return false; }
+  bool get_sensor_type(SensorType* sensor_type) { return false; }
+  bool store_calib_to_sensor(const std::string& calib_str) { return false; }
+  bool get_calib_from_sensor(std::string* calib_str) { return false; }
 };
 #else
 class XpSensorMultithread {
@@ -55,8 +65,11 @@ class XpSensorMultithread {
     uint16_t ColNum;
   };
   typedef std::function<
-      void(const cv::Mat&, const cv::Mat&, const float,
-           const std::chrono::time_point<std::chrono::steady_clock>)> ImageDataCallback;
+    void(const cv::Mat&, const cv::Mat&, const float,
+          const std::chrono::time_point<std::chrono::system_clock>)> SysImageDataCallback;
+  typedef std::function<
+    void(const cv::Mat&, const cv::Mat&, const float,
+          const std::chrono::time_point<std::chrono::steady_clock>)> SteadyImageDataCallback;
   typedef std::function<void(const XPDRIVER::ImuData&)> ImuDataCallback;
   typedef std::pair<uint64_t, std::chrono::time_point<std::chrono::steady_clock>>
       TimestampAndSysTime;
@@ -73,15 +86,15 @@ class XpSensorMultithread {
   bool stop();
 
   // Setters
-  // set_aec_index only sets aec_index_
-  // The AEC change will be applied to the sensor in thread_stream_images
-  bool set_aec_index(const int aec_index);
   bool set_auto_gain(const bool use_aec);
-  bool set_infrared_param(const XP_SENSOR::infrared_mode_t IR_mode, const int infrared_index,
-                          const int ir_period);
-  bool set_image_data_callback(const ImageDataCallback& callback);
-  bool set_IR_data_callback(const ImageDataCallback& callback);
+  bool set_sys_image_callback(const SysImageDataCallback& callback);
+  bool set_steady_image_callback(const SteadyImageDataCallback& callback);
+  bool set_sys_IR_callback(const SysImageDataCallback& callback);
+  bool set_steady_IR_callback(const SteadyImageDataCallback& callback);
   bool set_imu_data_callback(const ImuDataCallback& callback);
+  bool set_key_control(const char keypressed);
+  bool set_ir_period(const int ir_period);
+  bool set_awb_mode(bool AutoMode, float coeff_r, float coeff_g, float coeff_b);
   // Getters
   float get_image_rate() const { return stream_images_rate_; }
   float get_imu_rate() const { return pull_imu_rate_; }
@@ -90,7 +103,13 @@ class XpSensorMultithread {
   bool get_sensor_resolution(uint16_t* width, uint16_t* height);
   bool get_sensor_deviceid(std::string* device_id);
   bool get_sensor_type(SensorType* sensor_type);
+  bool get_calib_from_sensor(std::string *calib_str);
+  bool store_calib_to_sensor(const std::string& calib_str);
   bool is_color() const;
+  bool get_ir_on_status(void);
+  uint64_t get_current_frame_index() const {
+    return frame_counter_;
+  }
 
  protected:
   // Queue and Dequeue ioctl buffer as soon as possible
@@ -122,7 +141,7 @@ class XpSensorMultithread {
   bool get_v024_img_from_raw_data(const uint8_t* img_data_ptr,
                                  cv::Mat* img_l_ptr,
                                  cv::Mat* img_r_ptr);
-  bool get_v034_img_from_raw_data(const uint8_t* img_data_ptr,
+  bool get_color_img_from_raw_data(const uint8_t* img_data_ptr,
                                  cv::Mat* img_l_ptr,
                                  cv::Mat* img_r_ptr);
   void handle_col_shift_case(uint8_t* img_data_ptr, int col_shift);
@@ -136,13 +155,20 @@ class XpSensorMultithread {
                         XPDRIVER::ImuData* xp_imu_ptr) const;
   bool timestamp_check(const uint64_t ts_with_overflow,
                        const std::chrono::time_point<std::chrono::steady_clock>& sys_time);
-
+  bool set_infrared_param(const XP_SENSOR::infrared_mode_t IR_mode, const int infrared_index,
+                        const int ir_period);
+  // set_aec_index only sets aec_index_
+  // The AEC change will be applied to the sensor in thread_stream_images
+  bool set_aec_index(const int aec_index);
+  inline bool process_ir_control(char keypressed);
+  inline bool process_gain_control(char keypressed);
   // Member variables for sensor control
   std::string sensor_type_str_;
   std::string wb_mode_str_;
   SensorType sensor_type_;
   std::string dev_name_;
   std::atomic<bool> is_running_;
+  uint64_t frame_counter_;
   bool imu_from_image_;
   bool open_rgb_ir_mode_;
   int rgb_ir_period_;
@@ -179,8 +205,10 @@ class XpSensorMultithread {
   XPDRIVER::shared_queue<RawPtrAndSysTime> raw_sensor_img_mmap_ptr_queue_;
 
   // For callback functions
-  ImageDataCallback image_data_callback_;
-  ImageDataCallback IR_data_callback_;
+  SysImageDataCallback image_callback_with_sys_clock_;
+  SteadyImageDataCallback image_callback_with_steady_clock_;
+  SysImageDataCallback IR_callback_with_sys_clock_;
+  SteadyImageDataCallback IR_callback_with_steady_clock_;
   ImuDataCallback imu_data_callback_;
   std::shared_ptr<AutoWhiteBalance> whiteBalanceCorrector_;
 };

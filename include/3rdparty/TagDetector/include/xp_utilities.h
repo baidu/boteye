@@ -55,11 +55,8 @@ int det_tag(
     apriltag_detector_t* td_ptr,
     const cv::Mat& mat,
     std::vector<cv::Point2f>* corner_positions,
-    std::vector<int>* corner_ids);
-
-/*
-image_u8_t *image_u8_t_create_from_opencv_mat(const cv::Mat& mat);
-*/
+    std::vector<int>* corner_ids,
+    const float min_edge_pix);
 
 };  // namespace MARKER
 

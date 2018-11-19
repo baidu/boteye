@@ -47,10 +47,13 @@ enum class SensorType {
   XPIRL = 4,
   XPIRL2 = 5,
   XPIRL3 = 6,
+  XPIRL3_A = 7,
+  ONE = 8,
   Unkown_sensor = 255
 };
 
-const std::string SensorName[] = {"XP", "XP2", "XP3", "FACE", "XPIRL", "XPIRL2", "XPIRL3"};
+const std::string SensorName[] = {"XP", "XP2", "XP3", "FACE", "XPIRL", "XPIRL2", "XPIRL3",
+                                  "XPIRL3_A", "BoteyeOne"};
 
 // need to know camera len more info to refactor this structure
 enum class CameraLenType {

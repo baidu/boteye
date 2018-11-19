@@ -42,6 +42,8 @@
 #endif
 
 #define XP_CLOCK_32BIT_MAX_COUNT 0x00000000ffffffff
+#define XP_CALIB_MAX_LEN (1024 * 60)
+#define XP_SECTOR_MAX_LEN (1024 * 64)
 
 namespace XPDRIVER {
 struct XpSoftVersion {
@@ -81,11 +83,15 @@ bool convert_soft_version(const char* current_soft_ver,
 bool check_min_soft_version(const char* soft_ver, XpSoftVersion* firmware_soft_ver);
 SensorType read_hard_version(int fd);
 void read_deviceID(int fd, char* device_id);
+void make_crc16(const uint8_t* pDataIn, int iLenIn, uint16_t* pCRCOut);
+bool verify_crc16(const uint8_t* pDataIn, int iLenIn);
+bool read_calib_from_device(int fd, uint8_t *dest_buffer, int *size);
+bool read_calib_str_from_device(int fd, std::string *calib_str);
+void write_calib_to_device(int fd, uint8_t *buffer, int size);
+void write_calib_str_to_device(int fd, const std::string &calib_str);
+void read_calib_from_file(const std::string &filename, uint8_t *buffer);
 
 // Deprecated function
-/*
-int set_auto_exp_and_gain(int fd, bool ae, bool ag);
-*/
 struct IR_ctl_t {
   uint8_t UpdateBit: 1;
   uint8_t Set_infrared_mode: 1;

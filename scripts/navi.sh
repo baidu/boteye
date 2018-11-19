@@ -38,4 +38,4 @@ ${MASTER_DIR}/build/pc_apps/app_tracking/\
 --navigation_folder=$navigation_folder \
 --navi_config=${MASTER_DIR}/XP/config/navigation_param.yaml \
 --calib_file=$HOME/Boteye/calibration/calib.yaml \
---sensor_type=XP3
+--sensor_type=XP3 \

@@ -5,7 +5,7 @@
 # ----------------------------------------------------------------------------
 
 find_package(Boost
- COMPONENTS filesystem system
+ COMPONENTS filesystem system thread
  REQUIRED
 )
 

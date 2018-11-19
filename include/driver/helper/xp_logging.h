@@ -55,28 +55,28 @@
   {   \
     std::ostringstream oss;\
     oss << msg; oss.flush();\
-    __android_log_print(ANDROID_LOG_INFO, "boteyeR:",  oss.str().c_str());\
+    __android_log_write(ANDROID_LOG_INFO, "boteyeR:",  oss.str().c_str());\
     oss.clear();\
   }
   #define XP_LOG_WARNING(msg) \
   {   \
     std::ostringstream oss;\
     oss << msg; oss.flush();\
-    __android_log_print(ANDROID_LOG_WARN, "boteyeR:",  oss.str().c_str());\
+    __android_log_write(ANDROID_LOG_WARN, "boteyeR:",  oss.str().c_str());\
     oss.clear();\
   }
   #define XP_LOG_ERROR(msg) \
   {   \
     std::ostringstream oss;\
     oss << msg; oss.flush();\
-    __android_log_print(ANDROID_LOG_ERROR, "boteyeR:",  oss.str().c_str());\
+    __android_log_write(ANDROID_LOG_ERROR, "boteyeR:",  oss.str().c_str());\
     oss.clear();\
   }
   #define XP_LOG_FATAL(msg) \
   {   \
     std::ostringstream oss;\
     oss << msg; oss.flush();\
-    __android_log_print(ANDROID_LOG_ERROR, "boteyeR:",  oss.str().c_str());\
+    __android_log_write(ANDROID_LOG_ERROR, "boteyeR:",  oss.str().c_str());\
     oss.clear();\
     exit(EXIT_FAILURE);\
   }

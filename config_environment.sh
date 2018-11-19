@@ -12,7 +12,7 @@ fi
 
 if [ "$(uname -s)" = "Linux" ]; then
   echo "OS:Linux detected"
-  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${MASTER_DIR}/lib_$(uname -p):${thirdparty_lib_dir}
+  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${MASTER_DIR}/lib_$(uname -m):${thirdparty_lib_dir}
   echo "LD_LIBRARY_PATH="${LD_LIBRARY_PATH}
 elif [ "$(uname -s)" = "Darwin" ]; then
   echo "OS:Darwin detected"

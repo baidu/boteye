@@ -17,8 +17,10 @@
 #ifndef XP_INCLUDE_XP_APP_API_POSE_PACKET_H_
 #define XP_INCLUDE_XP_APP_API_POSE_PACKET_H_
 
+#include <Eigen/Core>
 #include <cstdlib>
 #include <functional>
+#include <vector>
 #include <chrono>
 #include <cmath>
 
@@ -283,6 +285,21 @@ struct CommandMessage {
   const int signature = COMMAND_MESSAGE_SIGNATURE;
   int val;
   Command command;  // enum should be stored as int32_t
+};
+
+enum class MotionMode {
+  LOOP = 0,
+  CONTROL = 1,
+  MANUAL = 2,
+  NONE = 3,
+};
+enum class ManualMotionAction {
+  FORWARD = 0,
+  BACKWARD = 1,
+  LEFT = 2,
+  RIGHT = 3,
+  IDLE = 4,
+  NONE = 5
 };
 }  // namespace XP_TRACKER
 #endif  // XP_INCLUDE_XP_APP_API_POSE_PACKET_H_

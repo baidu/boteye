@@ -19,7 +19,7 @@ target_link_libraries(${PROJECT_NAME}
  ${OpenCV_LIBRARIES}
  ${GLOG_LIBRARY}
  ${GFLAGS_LIBRARY}
- ${XP_LIBRARY}
+ ${XP_LIBRARIES}
  ${XP_DRIVER_LIBRARY}
  ${Boost_LIBRARIES}
 )

@@ -15,6 +15,7 @@
  *****************************************************************************/
 /// \file
 #include <plotting_utils.h>
+#include <xp_driver_interface.h>
 // UDP
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -28,7 +29,7 @@
 #include <XP/worker/actuator_impl.h>
 #include <XP/helper/serial-lib.h>
 // For config params
-#include <XP/helper/param.h>
+#include <XP/helper/param_internal.h>  // for NaviParam
 // Parsing flags and logging
 #include <gflags/gflags.h>
 #include <glog/logging.h>
@@ -108,6 +109,11 @@ DEFINE_bool(use_harris_feat, false, "whether or not use harris feat detection (v
  *
  * If empty, will not record anything
  */
+
+DEFINE_string(pb_load, "",
+              "Protobuf map file to load separately without entering navigation mode. "
+              "To enable navigation, flag navigation_folder should be set.");
+
 DEFINE_string(record_path, "",
               "the base folder of the recording file. Enable recording if specified");
 /** \brief A special mode to only record the map (live.pb) with no images / imu data
@@ -136,7 +142,7 @@ DEFINE_string(depth_param_path, "", "where to load depth config file");
 DEFINE_string(bow_dic_path, "", "bow dic path");
 /** \brief Camera calibration file to load
  *
- * Must provide it.
+ * If provided, program will load from this file. Otherwise, program will try to load from sensor.
  */
 DEFINE_string(calib_file, "", "camera calibration file");
 /** \brief Whether or not show depth image estimated from stereo
@@ -173,12 +179,12 @@ DEFINE_bool(iba_for_vio, false, "Use IBA as the backend for VIO for not");
 DEFINE_string(navi_config, "", "Specify the navigation config file. If empty, turn off navigation");
 /** \brief The UDP IP and port that the tracking app will send guide message to.
  *
- * These flags only take effect when path_follower walk is enabled.
+ * These flags only take effect when actuator sample mode is enabled.
  */
 DEFINE_string(guide_ip, "", "the ip that the UDP guide message is sent to. e.g. 127.0.0.1");
 /** \brief The UDP port that the tracking app will send guide message to.
  *
- * These flags only take effect when path_follower walk is enabled.
+ * These flags only take effect when actuator sample mode is enabled.
  */
 DEFINE_int32(guide_port, -1, "the port that the UDP guide message is sent to. -1 ignore");
 /** \brief The UDP port that the tracking app will receive wheel odom message.
@@ -186,18 +192,11 @@ DEFINE_int32(guide_port, -1, "the port that the UDP guide message is sent to. -1
  * These flags only take effect when actuator sample mode is enabled.
  */
 DEFINE_int32(recv_odom_port, -1, "the port that the UDP wheel odom message is received. -1 ignore");
-/** \brief The serial port device that the tracking app will send guide message to.
- *
- * This flag only takes effect when path_follower walk is enabled.
- *
- */
-DEFINE_string(guide_serial_dev, "",
-              "the serial port device the guide message is sent to, e.g. /dev/ttyUSB0");
 /** \brief Use which type of sensor
  *
  * XP, XP2, XP3: XP, XP2, XP3 sensor
  */
-DEFINE_string(sensor_type, "XP", "XP, XP2, XP3, XPIRL, XPIRL2");
+DEFINE_string(sensor_type, "XP", "XP, XP2, XP3, XPIRL, XPIRL2, ONE, HTTP");
 /** \brief Where does the video sensor open
  *
  */
@@ -251,7 +250,10 @@ DEFINE_string(stream_address,
 // TODO(Mingyu): use a flag to turn on NcsWorker with hardcoded config for now
 DEFINE_bool(use_ncs, false, "Turn on the NcsWorker with the hardcoded config for now");
 
-static std::shared_ptr<cv::Mat> g_img_l_ptr;  // [NOTE] g_img_l_ptr is NOT 100% thread-safe
+/** \brief Only print the configuration of the current build of libXP and exit app_tracking
+ */
+DEFINE_bool(ver, false, "Print the configuration of the current build of libXP and exit");
+
 static XP_TRACKER::VioState vio_state;
 /** \brief Callback function for getting vio state
  *
@@ -357,7 +359,7 @@ void ocr() {
 
 void thread_apis() {
   while (run_flag) {
-    cv::imwrite("/tmp/1.jpg", *g_img_l_ptr);
+    cv::imwrite("/tmp/1.jpg", *live::XpDriverInterface::getInstance().g_img_l_ptr);
     g_image_for_api = cv::imread("/tmp/1.jpg", CV_LOAD_IMAGE_COLOR);
     aip::get_file_content("/tmp/1.jpg", &file_content);
     std::vector<std::thread> thread_pool;
@@ -417,64 +419,16 @@ bool init_client_socket(const int port) {
   return true;
 }
 
-/// Serial port related code
-int g_serial_fd = 0;
-bool init_guide_serialport(const std::string &dev) {
-  constexpr int baudrate = 115200;
-  g_serial_fd = XP::serialport_init(dev.c_str(), baudrate);
-  if (g_serial_fd <= 0) {
-    LOG(ERROR) << dev << " cannot be initialized";
-    return false;
-  }
-  return true;
-}
-bool close_guide_serialport() {
-  if (g_serial_fd > 0) {
-    XP::serialport_close(g_serial_fd);
-    return true;
-  }
-  return false;
-}
-bool send_guide_serialport(const XP_TRACKER::GuideMessage &guide_message) {
-  // [NOTE] Customize the serial port message here!
-  // [NOTE] Tune the control velocity / angular velocity here!!
-  int16_t vel = static_cast<int16_t>(guide_message.vel);  // convert to mm/s
-  int16_t angv = static_cast<int16_t>(guide_message.angular_vel);  // convert to mrad/s
-  constexpr int kN = 9;
-  uint8_t buf[kN];
-  buf[0] = 0x0B;  // header 0
-  buf[1] = 0x0D;  // header 1
-  buf[2] = 5;     // payload length
-  buf[3] = 0x01;  // uid
-  buf[4] = vel & 0xff;          // velocity force little endian
-  buf[5] = (vel >> 8) & 0xff;
-  buf[6] = angv & 0xff;  // angv force little endian
-  buf[7] = (angv >> 8) & 0xff;
-  int chks = 0;
-  for (int i = 0; i < kN - 1; ++i) {
-    chks += buf[i];
-  }
-  buf[kN - 1] = (-chks) & 0xff;
-  if (XP::serialport_write_n(g_serial_fd, buf, kN) != 0)
-    return false;
-  return true;
-}
-
 /** \brief Callback function for getting walk guide information
  *
- * The information will be sent to UDP port and/or serial port via USB
+ * The information will be sent to UDP port
  * \param guide_message The guide message produced by SDK
  */
-void path_follower_walk_callback(const XP_TRACKER::GuideMessage &guide_message) {
+void guide_message_callback(const XP_TRACKER::GuideMessage &guide_message) {
   if (g_send_guide_socket >= 0) {
     if (sendto(g_send_guide_socket, &guide_message, sizeof(guide_message), 0,
                (struct sockaddr *) &g_send_guide_udp_addr, sizeof(g_send_guide_udp_addr)) < 0) {
       LOG(ERROR) << "sendto() failed -> " << FLAGS_guide_ip << ":" << FLAGS_guide_port;
-    }
-  }
-  if (g_serial_fd > 0) {
-    if (!send_guide_serialport(guide_message)) {
-      LOG(ERROR) << "send_guide_serialport failed via " << FLAGS_guide_serial_dev;
     }
   }
 }
@@ -504,87 +458,6 @@ void mouse_data_callback(int event, int x, int y, int flags, void *mouse_data_pt
   }
 }
 
-namespace live {
-std::unique_ptr<XPDRIVER::XpSensorMultithread> xp_sensor(nullptr);
-bool init_XP_sensor(const std::string &sensor_type,
-                    const bool auto_gain,
-                    const bool imu_from_image,
-                    const std::string sensor_dev_path,
-                    const std::string wb_mode) {
-#ifdef __linux__
-  if (sensor_type == "XP" ||
-      sensor_type == "XP2" ||
-      sensor_type == "XP3" ||
-      sensor_type == "XPIRL" ||
-      sensor_type == "XPIRL2") {
-    xp_sensor.reset(new XPDRIVER::XpSensorMultithread(sensor_type,
-                                                      auto_gain,
-                                                      imu_from_image,
-                                                      sensor_dev_path,
-                                                      wb_mode));
-    if (xp_sensor) {
-      return xp_sensor->init();
-    } else {
-      return false;
-    }
-  } else {
-    LOG(ERROR) << "sensor type " << sensor_type << " NOT supported!";
-    return false;
-  }
-#else
-  LOG(ERROR) << "Only support Linux for now";
-  return false;
-#endif  // __linux__
-}
-
-// [NOTE] Make sure no blocking operations within this function. This is the critical path
-// to pass data to our SLAM engine
-void image_data_callback(const cv::Mat& img_l,
-                         const cv::Mat& img_r,
-                         const float ts_100us,
-                         const std::chrono::time_point<std::chrono::steady_clock>& sys_time) {
-  XP_TRACKER::image_data_callback(img_l, img_r, ts_100us, sys_time);  // Pass image into XP tracker
-  // Pass the left view for other processing
-  // [NOTE] this image_data_callback will only be triggered in the live sensor mode.
-  if (g_img_l_ptr) {
-    if (g_img_l_ptr->rows == 0) {
-      g_img_l_ptr->create(img_l.size(), img_l.type());
-    }
-    img_l.copyTo(*g_img_l_ptr);
-  }
-}
-// [NOTE] Make sure no blocking operations within this function. This is the critical path
-// to pass data to our SLAM engine
-void imu_data_callback(const XPDRIVER::ImuData &imu_data) {
-  XP_TRACKER::imu_data_callback(imu_data);  // Pass IMU data into XP tracker
-}
-void get_data_rate(float *img_rate, float *imu_rate) {
-#ifdef __linux__
-  if (xp_sensor) {
-    *img_rate = xp_sensor->get_image_rate();
-    *imu_rate = xp_sensor->get_imu_rate();
-    return;
-  }
-#endif  // __linux__
-  *img_rate = -1.f;
-  *imu_rate = -1.f;
-}
-bool register_data_callbacks() {
-#ifdef __linux__
-  if (xp_sensor) {
-    xp_sensor->set_image_data_callback(
-        std::bind(image_data_callback,
-                  std::placeholders::_1, std::placeholders::_2,
-                  std::placeholders::_3, std::placeholders::_4));
-    xp_sensor->set_imu_data_callback(
-        std::bind(imu_data_callback, std::placeholders::_1));
-    return true;
-  }
-#endif  // __linux__
-  return false;
-}
-}  // namespace live
-
 /** \brief  Main function
  * \param  argc An integer argument count of the command line arguments
  * \param  argv An argument vector of the command line arguments
@@ -608,6 +481,11 @@ int main(int argc, char **argv) {
   }
 #endif  // HAS_OPENCV_VIZ
 
+  if (FLAGS_ver) {
+    XP_TRACKER::print_XP_configuration();
+    return 0;
+  }
+
   // Initialize XP sensor (or load from files)
   if (!FLAGS_load_path.empty()) {
     if (!XP_TRACKER::init_data_loader(FLAGS_load_path)) {
@@ -617,11 +495,16 @@ int main(int argc, char **argv) {
     }
   } else {
     // [NOTE] This is the place to swap in a custom hardware if NOT using XP sensor
-    if (!live::init_XP_sensor(FLAGS_sensor_type,
-                              !FLAGS_disable_auto_gain,
-                              FLAGS_imu_from_image,
-                              FLAGS_sensor_dev_path,
-                              FLAGS_wb_mode)) {
+    if (FLAGS_sensor_type == "HTTP") {
+      if (!live::XpDriverInterface::getInstance().init_http_sensor()) {
+        LOG(ERROR) << "!live::init_http_sensor()";
+        return -1;
+      }
+    } else if (!live::XpDriverInterface::getInstance().init_XP_sensor(FLAGS_sensor_type,
+                                                                      !FLAGS_disable_auto_gain,
+                                                                      FLAGS_imu_from_image,
+                                                                      FLAGS_sensor_dev_path,
+                                                                      FLAGS_wb_mode)) {
       LOG(ERROR) << "!live::init_XP_sensor()";
       return -1;
     }
@@ -644,7 +527,22 @@ int main(int argc, char **argv) {
                                       network_means,
                                       network_scales);
     }
-    live::register_data_callbacks();
+    live::XpDriverInterface::getInstance().register_data_callbacks();
+
+    // If FLAGS_calib_file is not provided, try to load the calibration from the sensor.
+    // Need to store into a tmp file if a calib file is successfully loaded
+    if (FLAGS_calib_file.empty()) {
+      std::string calib_file_temp = "/tmp/calib_from_sensor.yaml";
+      XP::DuoCalibParam calib_from_sensor;
+      if (!live::XpDriverInterface::getInstance().auto_calib_load(&calib_from_sensor)) {
+        LOG(ERROR) << "Cannot load calib from the sensor.  Must provide a calib_file!";
+        return -1;
+      }
+      calib_from_sensor.WriteToYaml(calib_file_temp);
+      // TODO(huyuexiang): Fix this tmp calib file hack.
+      // Overwrite FLAGS_calib_file to point to the calib file read from the sensor.
+      FLAGS_calib_file = calib_file_temp;
+    }
   }
 
   if (FLAGS_vio_config.empty()) {
@@ -666,7 +564,7 @@ int main(int argc, char **argv) {
       return -1;
     }
     FLAGS_depth_param_path =
-      std::string(env_p) + "/XP/config/depth_param.yaml";
+        std::string(env_p) + "/XP/config/depth_param.yaml";
     LOG(INFO) << "Default config " << FLAGS_depth_param_path;
   }
   if (FLAGS_bow_dic_path.empty()) {
@@ -692,7 +590,10 @@ int main(int argc, char **argv) {
     LOG(ERROR) << "Init tracker failed";
     return -1;
   }
-  XP_TRACKER::set_data_rate_callback(live::get_data_rate);
+  XP_TRACKER::set_data_rate_callback([](float *img_rate,
+                                        float *imu_rate) {
+    live::XpDriverInterface::getInstance().get_data_rate(img_rate, imu_rate);
+  });
 
   if (FLAGS_udp_send_to_port > 0) {
     if (FLAGS_udp_send_to_ip.empty()) {
@@ -710,18 +611,29 @@ int main(int argc, char **argv) {
       LOG(ERROR) << "init_udp_listen failed";
     }
   }
+
+  if ((!FLAGS_pb_load.empty()) &&
+      (FLAGS_navigation_folder.empty())) {
+    LOG(INFO) << "Mode: loading map pb without navigation.";
+    if (!XP_TRACKER::load_map(FLAGS_pb_load)) {
+      LOG(ERROR) << "Loading map pb failed";
+    } else {
+      LOG(INFO) << "Loaded " << FLAGS_pb_load;
+    }
+  }
+
   // [Optional] Configure map loading and navigation
   bool is_navigation_set = false;
   if (!FLAGS_navigation_folder.empty()) {
     string pb_load = FLAGS_navigation_folder + "/navi.pb";
     if (!XP_TRACKER::load_map(pb_load)) {
       LOG(ERROR) << "Loading map failed";
+    } else {
+      LOG(INFO) << "Loaded " << FLAGS_pb_load;
     }
     if (!FLAGS_server_address.empty()) {
       std::string device_id = "unknown";
-      if (live::xp_sensor) {
-        live::xp_sensor->get_sensor_deviceid(&device_id);
-      }
+      live::XpDriverInterface::getInstance().get_sensor_deviceid(&device_id);
       if (!XP_TRACKER::init_robot_client(FLAGS_server_address,
                                          FLAGS_stream_address,
                                          device_id,
@@ -736,24 +648,7 @@ int main(int argc, char **argv) {
       CHECK(navi_param.LoadFromYaml(FLAGS_navi_config)) << "Fail to load " << FLAGS_navi_config;
       LOG(INFO) << FLAGS_navi_config << " is loaded ";
 
-      if (navi_param.Navigation.type == "robot") {
-        LOG(ERROR) << "Navigation.type:robot will be deprecated soon!!!";
-        is_navigation_set = XP_TRACKER::set_path_follower_robot(navi_param);
-      } else if (navi_param.Navigation.type == "walk") {
-        LOG(ERROR) << "Navigation.type:walk will be deprecated soon!!!";
-        if (!FLAGS_guide_serial_dev.empty()) {
-          if (!init_guide_serialport(FLAGS_guide_serial_dev)) {
-            return -1;
-          }
-        }
-        if (!FLAGS_guide_ip.empty() && FLAGS_guide_port >= 0) {
-          if (!init_server_socket(FLAGS_guide_ip, FLAGS_guide_port)) {
-            return -1;
-          }
-        }
-        is_navigation_set = XP_TRACKER::set_path_follower_walk(navi_param,
-                                                               path_follower_walk_callback);
-      } else if (navi_param.Navigation.type == "navi") {
+      if (navi_param.Navigation.type == "navi") {
         std::shared_ptr<XP::Actuator> actuator_ptr;
         if (navi_param.Actuator.type == "sample") {
           if (!FLAGS_guide_ip.empty() && FLAGS_guide_port >= 0) {
@@ -766,15 +661,24 @@ int main(int argc, char **argv) {
               return -1;
             }
           }
-          actuator_ptr.reset(new XP::SampleActuator(path_follower_walk_callback,
+          actuator_ptr.reset(new XP::SampleActuator(navi_param.Actuator,
+                                                    navi_param.Lidar,
+                                                    guide_message_callback,
                                                     wheel_odom_callback));
         } else if (navi_param.Actuator.type == "reeman" ||
-                   navi_param.Actuator.type == "dilili") {
-          actuator_ptr.reset(new XP::KincoActuator(navi_param.Actuator));
+            navi_param.Actuator.type == "dilili") {
+          actuator_ptr.reset(new XP::KincoActuator(navi_param.Actuator, navi_param.Lidar));
         } else if (navi_param.Actuator.type == "eai") {
-          actuator_ptr.reset(new XP::EaiActuator(navi_param.Actuator));
+          actuator_ptr.reset(new XP::EaiActuator(navi_param.Actuator, navi_param.Lidar));
         } else if (navi_param.Actuator.type == "gyroor") {
-          actuator_ptr.reset(new XP::GyroorActuator(navi_param.Actuator));
+          actuator_ptr.reset(new XP::GyroorActuator(navi_param.Actuator, navi_param.Lidar));
+        } else if (navi_param.Actuator.type == "turtlebot3") {
+#ifdef HAS_ROS
+          actuator_ptr.reset(new XP::RosActuator(navi_param.Actuator, navi_param.Lidar));
+#else
+          LOG(ERROR) << "Actuator type turtlebot3 is not supported in current build of XP";
+          return -1;
+#endif
         } else {
           // [NOTE] Insert the user-customized actuator here
           LOG(ERROR) << "Not supported actuator type: " << navi_param.Actuator.type;
@@ -788,7 +692,6 @@ int main(int argc, char **argv) {
       }
       if (navi_param.Navigation.use_trajectory_file) {
         // XP_TRACKER::set_navigator sets the planned_trajectory file through
-        // PathFollowerBase::set_generated_trajectory_file for path follower.
         // XP_TRACKER::set_navigator_trajectory sets the planned_trajectory file for navigator.
         if (!XP_TRACKER::set_navigator_trajectory(FLAGS_navigation_folder)) {
           LOG(ERROR) << "Failed to set navigation trajectory from file, "
@@ -812,7 +715,6 @@ int main(int argc, char **argv) {
   }
 #endif
 
-  g_img_l_ptr.reset(new cv::Mat());
 #ifdef HAS_RECOGNITION
   if (FLAGS_face_recognition || FLAGS_face_attribute || FLAGS_ocr) {
     read_api_keys();
@@ -929,9 +831,9 @@ int main(int argc, char **argv) {
     }
   }  // !FLAGS_no_display
   XP_TRACKER::set_vio_state_callback(std::bind(&vio_state_callback, std::placeholders::_1));
-  if (live::xp_sensor) {
-    live::xp_sensor->run();  // Start spinning the XP sensor
-  }
+
+  live::XpDriverInterface::getInstance().run();  // Start spinning the XP sensor
+
   if (!XP_TRACKER::run_tracker_MT()) {
     LOG(ERROR) << "run_tracker_MT failed";
     return -1;
@@ -987,7 +889,7 @@ int main(int argc, char **argv) {
               // otherwise pass an empty mat into the function
             }
             pose_viewer_3d_ptr->viz3d_once(cam_pose,
-                                           *g_img_l_ptr,
+                                           *live::XpDriverInterface::getInstance().g_img_l_ptr,
                                            rig_xyz_mat,
                                            depth_result_img);
           }
@@ -1048,29 +950,44 @@ int main(int argc, char **argv) {
             if (!XP_TRACKER::send_command_to_mapper("AddTagToLastKeyFrame", key_pressed)) {
               LOG(ERROR) << "send_command_to_mapper AddTagToLastKeyFrame failed";
             }
-          } else {
-            // in control mode
-            // go to a frame with ID
-            if (!XP_TRACKER::send_command_to_mapper("PathFollowerGoTo", key_pressed)) {
-              LOG(ERROR) << "send_command_to_mapper PathFollowerGoTo failed";
-            }
           }
         } else if (key_pressed == 'S' || key_pressed == 's') {
           XP_TRACKER::set_static(true);
         } else if (key_pressed == 'M' || key_pressed == 'm') {
           XP_TRACKER::set_static(false);
 #ifdef HAS_RECOGNITION
-        } else if (key_pressed == 'r') {
-          run_flag = !run_flag;
-          if (run_flag) {
-            std::thread(thread_apis).detach();
-          }
+          } else if (key_pressed == 'r') {
+            run_flag = !run_flag;
+            if (run_flag) {
+              std::thread(thread_apis).detach();
+            }
 #endif
         } else if (key_pressed == 10) {
           // CR is pressed
           XP_TRACKER::finish_set_loop_targets();
+        } else if (key_pressed == 'I' || key_pressed == 'i') {
+          // up is pressed
+          XP_TRACKER::set_navigator_motion_mode(XP_TRACKER::MotionMode::MANUAL);
+          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::ManualMotionAction::FORWARD);
+        } else if (key_pressed == 'K' || key_pressed == 'k') {
+          // down is pressed
+          XP_TRACKER::set_navigator_motion_mode(XP_TRACKER::MotionMode::MANUAL);
+          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::ManualMotionAction::BACKWARD);
+        } else if (key_pressed == 'J' || key_pressed == 'j') {
+          // left is pressed
+          XP_TRACKER::set_navigator_motion_mode(XP_TRACKER::MotionMode::MANUAL);
+          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::ManualMotionAction::LEFT);
+        } else if (key_pressed == 'L' || key_pressed == 'l') {
+          // right is pressed
+          XP_TRACKER::set_navigator_motion_mode(XP_TRACKER::MotionMode::MANUAL);
+          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::ManualMotionAction::RIGHT);
+        } else if (key_pressed == ' ' || key_pressed == 32) {
+          // idle is pressed
+          std::cout << "exit manual control mode" << std::endl;
+          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::ManualMotionAction::IDLE);
+          XP_TRACKER::set_navigator_motion_mode(XP_TRACKER::MotionMode::CONTROL);
         } else if (key_pressed == static_cast<char>(-1)) {
-          // nothing is pressed
+            // nothing is pressed
         } else {
           LOG(ERROR) << "Key " << static_cast<int32_t>(key_pressed)
                      << " is pressed but unknown";
@@ -1084,8 +1001,8 @@ int main(int argc, char **argv) {
     while (true) {
 #ifndef __CYGWIN__
       if (!FLAGS_vis_img_save_path.empty()) {
-        if (g_img_l_ptr->rows > 0) {
-          cv::imwrite(FLAGS_vis_img_save_path, *g_img_l_ptr);
+        if (live::XpDriverInterface::getInstance().g_img_l_ptr->rows > 0) {
+          cv::imwrite(FLAGS_vis_img_save_path, *live::XpDriverInterface::getInstance().g_img_l_ptr);
           usleep(100000);  // 10 Hz
         }
       }
@@ -1115,14 +1032,9 @@ int main(int argc, char **argv) {
   }
 
   XP_TRACKER::stop_tracker();
-  if (live::xp_sensor) {
-    live::xp_sensor->stop();  // Stop spinning XP sensor
-  }
-  if (g_serial_fd > 0) {
-    close_guide_serialport();
-  }
+  live::XpDriverInterface::getInstance().stop();  // Stop spinning XP sensor or http stream
 
   // Linux crashes at the end if release is not explicitly called
-  g_img_l_ptr->release();
+  live::XpDriverInterface::getInstance().g_img_l_ptr->release();
   return 0;
 }
