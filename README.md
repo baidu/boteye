@@ -1,6 +1,6 @@
 ## BotEye:: Baidu Robotic Vision SDK ##
 
-For details, please refer to [BotEye Wiki](https://github.com/baidu/boteye/wiki).
+For details, please refer to [BotEye Wiki](https://github.com/baidu/boteye/wiki) or [机器人视觉平台介绍](http://ai.baidu.com/docs#/Roboticvision-Introduction/top).
 
 ## NOTE: OS Version Support
 Currently, boteye SDK supports both **Ubuntu14.04** and **Ubuntu16.04**.   
