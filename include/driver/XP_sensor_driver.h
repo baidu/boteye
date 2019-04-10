@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,14 +19,16 @@
 /** [NOTE]
  * 1. XP sensor driver is the multi-thread implementation that drives the supported sensors
  *    (XP / XP2 / XP3) to get hardware synchronized images and IMU measurements
- * 2. There are two ways to get IMUs from supported sensors.
+ * 2. XpSensorMultithread derives from base class SensorMultithread.
+ * 3. There are two ways to get IMUs from supported sensors.
  *      a). Pull IMU measurements directly from the sensor
  *      b). Read IMU measurements embedded in the first row(s) of the image
- * 3. XP sensor driver only supports Linux for now.
+ * 4. XP sensor driver only supports Linux for now.
  */
 #include <driver/basic_datatype.h>  // For ImuData & XP_20608_data
 #include <driver/helper/basic_image_utils.h>  // For computeNewAecTableIndex
 #include <driver/xp_sensors_wb_table.h>
+#include <driver/base_sensor_driver.h>
 #include <driver/XP_sensor.h>
 #include <driver/v4l2.h>
 #include <driver/helper/shared_queue.h>  // For shared_queue
@@ -41,83 +43,66 @@
 namespace XPDRIVER {
 
 #ifndef __linux__
-class XpSensorMultithread {
+class XpSensorMultithread : public SensorMultithread {
  public:
   // Dummy implementation
   XpSensorMultithread(const std::string& sensor_type_str,
                       const bool use_auto_gain,
                       const bool imu_from_image,
                       const std::string& dev_name = "",
-                      const std::string& wb_mode = "auto") {}
-  bool init() { return false; }
-  bool run() { return false; }
-  bool stop() { return false; }
-  bool get_sensor_deviceid(std::string* device_id) { return false; }
-  bool get_sensor_type(SensorType* sensor_type) { return false; }
-  bool store_calib_to_sensor(const std::string& calib_str) { return false; }
-  bool get_calib_from_sensor(std::string* calib_str) { return false; }
+                      const std::string& dev_id = "",
+                      const std::string& wb_mode = "auto") :
+    SensorMultithread(sensor_type_str, use_auto_gain, imu_from_image, dev_name, dev_id, wb_mode) {}
+  bool init() override { return false; }
+  bool run() override { return false; }
+  bool stop() override { return false; }
+  bool get_sensor_deviceid(std::string* device_id) override { return false; }
+  bool get_sensor_type(SensorType* sensor_type) override { return false; }
+  bool store_calib_to_sensor(const std::string& calib_str) override { return false; }
+  bool get_calib_from_sensor(std::string* calib_str) override { return false; }
 };
 #else
-class XpSensorMultithread {
+class XpSensorMultithread : public SensorMultithread {
  public:
-  struct SensorResolution {
-    uint16_t RowNum;
-    uint16_t ColNum;
-  };
-  typedef std::function<
-    void(const cv::Mat&, const cv::Mat&, const float,
-          const std::chrono::time_point<std::chrono::system_clock>)> SysImageDataCallback;
-  typedef std::function<
-    void(const cv::Mat&, const cv::Mat&, const float,
-          const std::chrono::time_point<std::chrono::steady_clock>)> SteadyImageDataCallback;
-  typedef std::function<void(const XPDRIVER::ImuData&)> ImuDataCallback;
-  typedef std::pair<uint64_t, std::chrono::time_point<std::chrono::steady_clock>>
-      TimestampAndSysTime;
+  typedef std::pair<std::string, std::string> DevNameAndDevID;
 
   // Core functions
   XpSensorMultithread(const std::string& sensor_type_str,
                       const bool use_auto_gain,
                       const bool imu_from_image,
                       const std::string& dev_name = "",
+                      const std::string& dev_id = "",
                       const std::string& wb_mode = "auto");
   ~XpSensorMultithread();
-  bool init();
-  bool run();
-  bool stop();
+  bool init() override;
+  bool run() override;
+  bool stop() override;
 
   // Setters
-  bool set_auto_gain(const bool use_aec);
-  bool set_sys_image_callback(const SysImageDataCallback& callback);
-  bool set_steady_image_callback(const SteadyImageDataCallback& callback);
-  bool set_sys_IR_callback(const SysImageDataCallback& callback);
-  bool set_steady_IR_callback(const SteadyImageDataCallback& callback);
-  bool set_imu_data_callback(const ImuDataCallback& callback);
-  bool set_key_control(const char keypressed);
-  bool set_ir_period(const int ir_period);
-  bool set_awb_mode(bool AutoMode, float coeff_r, float coeff_g, float coeff_b);
+  bool set_auto_gain(const bool use_aec) override;
+  bool set_awb_mode(bool AutoMode, float coeff_r, float coeff_g, float coeff_b) override;
+  bool set_ir_period(const int ir_period) override;
+  bool set_key_control(const char keypressed) override;
   // Getters
-  float get_image_rate() const { return stream_images_rate_; }
-  float get_imu_rate() const { return pull_imu_rate_; }
-  float get_ir_image_rate() const { return stream_ir_images_rate_; }
-  bool get_sensor_soft_ver(XpSoftVersion* soft_ver);
-  bool get_sensor_resolution(uint16_t* width, uint16_t* height);
-  bool get_sensor_deviceid(std::string* device_id);
-  bool get_sensor_type(SensorType* sensor_type);
-  bool get_calib_from_sensor(std::string *calib_str);
-  bool store_calib_to_sensor(const std::string& calib_str);
-  bool is_color() const;
-  bool get_ir_on_status(void);
-  uint64_t get_current_frame_index() const {
-    return frame_counter_;
-  }
+  bool get_calib_from_sensor(std::string *calib_str) override;
+  bool get_ir_on_status(void) override;
+  bool get_sensor_deviceid(std::string* device_id) override;
+  bool get_sensor_resolution(uint16_t* width, uint16_t* height) override;
+  bool get_sensor_soft_ver(XpSoftVersion* soft_ver) override;
+  bool get_sensor_type(SensorType* sensor_type) override;
+  bool is_color() const override;
+  bool store_calib_to_sensor(const std::string& calib_str) override;
 
  protected:
   // Queue and Dequeue ioctl buffer as soon as possible
   // If ioctl queue is not retrieved on time, it may crash Odroid
   // Not a big problem on PC
-  void thread_ioctl_control();
-  void thread_pull_imu();
-  void thread_stream_images();
+  void thread_ioctl_control() override;
+  void thread_pull_imu() override;
+  void thread_stream_images() override;
+
+  void scan_videos(std::vector<DevNameAndDevID>* name_and_id);
+  bool find_dev_name(const std::string& deviceID, std::string* dev_name_ptr);
 
   // [NOTE] The returned cv::Mat is CV_8UC1 if the sensor is mono-color,
   //        and CV_8UC3 if the sensor is color
@@ -163,53 +148,18 @@ class XpSensorMultithread {
   inline bool process_ir_control(char keypressed);
   inline bool process_gain_control(char keypressed);
   // Member variables for sensor control
-  std::string sensor_type_str_;
-  std::string wb_mode_str_;
-  SensorType sensor_type_;
-  std::string dev_name_;
-  std::atomic<bool> is_running_;
-  uint64_t frame_counter_;
-  bool imu_from_image_;
   bool open_rgb_ir_mode_;
+  bool use_auto_infrared_;
   int rgb_ir_period_;
   XP_SENSOR::infrared_mode_t ir_mode_;
-  bool use_auto_gain_;
-  std::atomic<bool> aec_index_updated_;
-  int aec_index_;  // use signed int as the index can go to negative during calculation
-  bool aec_settle_;
-  bool use_auto_infrared_;
   std::atomic<bool> ir_ctl_updated_;
   std::atomic<uint64_t> congested_ms_;
   uint8_t infrared_index_;
-  int video_sensor_file_id_;
-  int imaging_FPS_;
   struct v4l2_buffer bufferinfo_;
-  uint64_t first_imu_clock_count_ = 0;
-  XP_SENSOR::XPSensorSpec XP_sensor_spec_;
-  RingBuffer<TimestampAndSysTime> ts_ring_buffer_;
-  uint64_t latest_img_ts_with_overflow_;
-
-  // For threading and timing stats
-  std::vector<std::thread> thread_pool_;
-  std::atomic<float> stream_images_rate_;
-  std::atomic<int> stream_images_count_;
-  std::atomic<float> stream_ir_images_rate_;
-  std::atomic<int> stream_ir_images_count_;
-  std::chrono::time_point<std::chrono::steady_clock> thread_stream_images_pre_timestamp_;
-  std::atomic<float> pull_imu_rate_;
-  std::atomic<int> pull_imu_count_;
-  std::chrono::time_point<std::chrono::steady_clock> thread_pull_imu_pre_timestamp_;
+  std::unique_ptr<XPDRIVER::V4L2> xp_v4l2_ptr_;
 
   // push by thread_ioctl_control. Fetch by thread_stream_images
-  typedef std::pair<uint8_t*, std::chrono::time_point<std::chrono::steady_clock>> RawPtrAndSysTime;
   XPDRIVER::shared_queue<RawPtrAndSysTime> raw_sensor_img_mmap_ptr_queue_;
-
-  // For callback functions
-  SysImageDataCallback image_callback_with_sys_clock_;
-  SteadyImageDataCallback image_callback_with_steady_clock_;
-  SysImageDataCallback IR_callback_with_sys_clock_;
-  SteadyImageDataCallback IR_callback_with_steady_clock_;
-  ImuDataCallback imu_data_callback_;
   std::shared_ptr<AutoWhiteBalance> whiteBalanceCorrector_;
 };
 

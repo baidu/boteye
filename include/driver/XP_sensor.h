@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@
 
 #include <driver/helper/counter_32_to_64.h>
 #include <driver/basic_datatype.h>  // for XP_20608_data
+#include <driver/v4l2.h>
 #include <opencv2/videoio.hpp>
 #include <string>
 #include <vector>
@@ -76,7 +77,8 @@ bool set_aec_index(int fd, uint32_t aec_index, SensorType sensor_type, bool verb
 bool set_exp_percentage(int fd, int16_t val, bool verbose = false);
 bool set_gain_percentage(int fd, int16_t val, bool verbose = false);
 bool xp_imu_embed_img(int fd, bool enable);
-bool get_XP_sensor_spec(int fd, XPSensorSpec* XP_sensor_spec_ptr);
+bool get_XP_sensor_spec(const std::unique_ptr<XPDRIVER::V4L2>& v4l2_ptr,
+                        XPSensorSpec* XP_sensor_spec_ptr);
 bool read_soft_version(int fd, char* soft_ver_ptr);
 bool convert_soft_version(const char* current_soft_ver,
                           XpSoftVersion* ver_unit);

@@ -3,6 +3,7 @@ project(cam_calibration)
 
 add_executable(${PROJECT_NAME}
  cam_calibration.cpp
+ verification.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC

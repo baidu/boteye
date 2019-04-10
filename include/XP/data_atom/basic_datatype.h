@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,6 +42,10 @@ struct ImuData {
 
 struct PoseAndTime {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  PoseAndTime() : T(Eigen::Matrix4f::Identity()), time_stamp(0.f) {}
+  PoseAndTime(const Eigen::Matrix4f &init_T, const float init_time_stamp) :
+              T(init_T),
+              time_stamp(init_time_stamp) {}
   float time_stamp;
   Eigen::Matrix4f T;
 };
@@ -49,13 +53,13 @@ struct PoseAndTime {
 // TODO(mingyu): Complete the constructor
 // TODO(mingyu): We may need a real depth map in the future for
 //               local path planning / obstacle avoidance
-// TODO(mingyu): Need an extra state to indicates vio is ok but relocalization fails so that
-//               we can enter the *searching* mode for relocalziation
 struct ViSlamMessage {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Eigen::Matrix4f T_WD_mapper;
   Eigen::Matrix4f T_WD_vio;
+  Eigen::Matrix4f T_WD_anchor;
   float pose_ts;         // the timestamp (in sec, the sensor time) of this pose
+  float anchor_ts;       // the timestamp (in sec, the sensor time) of the last anchor mapper pose
   std::vector<Eigen::Vector2f> obstacles_2d;  // x & y coordinates of obstacles in {G}
   float obstacle_ts;     // the timestamp (in sec) of this obstacle information
   bool vio_stable;       // vio stable means vio is NOT lost

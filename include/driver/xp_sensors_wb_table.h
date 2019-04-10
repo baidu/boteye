@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,6 @@ static const WB_PARAM s_wb_param[] = {
   {1.f, 1.f, 1.f},            // invalid for XP sensor
   {1.f, 1.f, 1.f},            // invalid for XP2 sensor
   {1.46582f, 1.f, 1.33606f},  // XP3
-  {1.46582f, 1.f, 1.33606f},  // FACE
   {1.f, 1.f, 1.f},            // XPIRL
   {1.f, 1.f, 1.f},            // XPIRL2
   {1.f, 1.f, 1.f},            // XPIRL3

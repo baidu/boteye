@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,15 +34,20 @@
 #include <ls01d_driver.h>
 #endif  // HAS_LSLIDAR
 
+#ifdef HAS_YDLIDAR
+#include <CYdLidar.h>
+#endif  // HAS_YDLIDAR
+
 #include <XP/worker/scanner.h>
-#include <XP/helper/param_internal.h>  // for NaviParam
 #include <string>
 #include <chrono>
-
+#include <vector>
 
 // single thread
 class NullScanner : public Scanner {
  public:
+  explicit NullScanner(const XP::NaviParam::LidarConfig_t &lidar_param)
+    : Scanner(lidar_param) {}
   bool init() override;
   void updateScan() override;
 };
@@ -64,12 +69,12 @@ class RPLidarScanner : public Scanner {
   void createDriver();
   bool connectDriver();
 
-  const char * serial_dev_;
+  const char *serial_dev_;
   uint32_t baudrateArray_[2];
   uint32_t baudrate_;
   rplidar_response_device_info_t devinfo_;
 
-  rp::standalone::rplidar::RPlidarDriver * device_;
+  rp::standalone::rplidar::RPlidarDriver *device_;
 };
 #endif  // HAS_RPLIDAR
 
@@ -86,12 +91,42 @@ class LSLidarScanner : public Scanner {
   void updateScan() override;
 
  protected:
-  const char * serial_dev_;
+  std::string serial_dev_;
 
-  io_driver* device_ls01d_;
-  lidar_driver* device_ls01b_;
+  io_driver *device_ls01d_;
+  lidar_driver *device_ls01b_;
 };
 #endif  // HAS_LSLIDAR
+
+#ifdef HAS_YDLIDAR
+class YDLidarScanner : public Scanner {
+ public:
+  explicit YDLidarScanner(const XP::NaviParam::LidarConfig_t &lidar_param);
+  ~YDLidarScanner() override;
+
+  bool init() override;
+  bool startScan() override;
+  bool stopScan() override;
+  void updateScan() override;
+
+ protected:
+  CYdLidar device_;
+  std::string port_;
+  int baudrate_;
+  bool resolution_fixed_;
+  bool intensities_;
+  bool low_exposure_;
+  bool auto_reconnect_;
+  bool reversion_;
+  int samp_rate_;
+  int frequency_;
+  std::vector<float> ignore_array_;
+
+  bool scan_first_;
+  uint64_t ydlidar_sys_time_start_nanosec_;
+  std::chrono::time_point<std::chrono::steady_clock> scan_sample_start_tp_;
+};
+#endif  // HAS_YDLIDAR
 
 #ifdef HAS_ROS
 // single thread
@@ -109,7 +144,6 @@ class RosScanner : public Scanner {
  protected:
   void scanCallback(const sensor_msgs::LaserScanConstPtr &scan);
   void diagCallback(const diagnostic_msgs::DiagnosticArrayConstPtr &diag);
-
 
   bool scan_first_;
   int64_t ros_header_time_nanosec_;

@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 
 #include <stdint.h>
 #include <string>
+#include <chrono>
 
 namespace XPDRIVER {
 
@@ -33,6 +34,15 @@ struct XP_20608_data {
   float gyro[3];
   float temp;
 };
+
+struct RkTimestamp {
+  uint64_t to_ms() const { return tv_sec * 1000 + tv_usec / 1000; }
+  uint64_t tv_sec;
+  uint64_t tv_usec;
+  std::chrono::time_point<std::chrono::system_clock> sys_ts;
+  std::chrono::time_point<std::chrono::steady_clock> steady_ts;
+};
+
 enum class ImageType {
   RGB = 1,
   IR = 2,
@@ -43,16 +53,15 @@ enum class SensorType {
   XP = 0,
   XP2 = 1,
   XP3 = 2,
-  FACE = 3,
-  XPIRL = 4,
-  XPIRL2 = 5,
-  XPIRL3 = 6,
-  XPIRL3_A = 7,
-  ONE = 8,
+  XPIRL = 3,
+  XPIRL2 = 4,
+  XPIRL3 = 5,
+  XPIRL3_A = 6,
+  ONE = 7,
   Unkown_sensor = 255
 };
 
-const std::string SensorName[] = {"XP", "XP2", "XP3", "FACE", "XPIRL", "XPIRL2", "XPIRL3",
+const std::string SensorName[] = {"XP", "XP2", "XP3", "XPIRL", "XPIRL2", "XPIRL3",
                                   "XPIRL3_A", "BoteyeOne"};
 
 // need to know camera len more info to refactor this structure

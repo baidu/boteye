@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -153,21 +153,23 @@ struct GuideMessage {
     FINISH = 3,
     LOST = 4,
     OBSTACLE_AVOID = 5,
-    MANUAL = 6
+    MANUAL = 6,
+    FORCE_RELOC = 7
   };
   GuideMessage() :
-    distance(0), degree(0), vel(0), angular_vel(0), status(FAIL) {
+    distance(0), degree(0), vel(0), angular_vel(0), target_id(-1), status(FAIL) {
   }
   explicit GuideMessage(const Status stat) :
-    distance(0), degree(0), vel(0), angular_vel(0), status(stat) {
+    distance(0), degree(0), vel(0), angular_vel(0), target_id(-1), status(stat) {
   }
   GuideMessage(const float dist, const float deg) :
-    distance(dist), degree(deg), status(OK) {
+    distance(dist), degree(deg), vel(0), angular_vel(0), target_id(-1), status(OK) {
   }
   float distance;
   float degree;
   float vel;
   float angular_vel;
+  int target_id;  // Not necessary. Currently, only used in RosXiaoduActuator.
   Status status;  // enum should be stored as int32_t
 };
 
@@ -216,28 +218,37 @@ struct WheelOdomMessage {
 //               when fusing odometry pose w/ SLAM pose.
 struct WheelOdomState {
   WheelOdomState() :
-    yaw(0.5 * M_PI), linear_velocity(0), angular_velocity(0),
+    linear_velocity(0),
+    angular_velocity(0),
     ts(std::chrono::steady_clock::now()) {
-  }
-  WheelOdomState& operator=(const WheelOdomState& state_) {
-    position.x = state_.position.x;
-    position.y = state_.position.y;
-    yaw = state_.yaw;
-    linear_velocity = state_.linear_velocity;
-    angular_velocity = state_.angular_velocity;
-    ts = state_.ts;
+    A0_T_Ai.setIdentity();
   }
   void reset(const std::chrono::steady_clock::time_point& cur_ts) {
-    position.x = 0;
-    position.y = 0;
-    yaw = 0.5 * M_PI;
+    A0_T_Ai.setIdentity();
     linear_velocity = 0;
     angular_velocity = 0;
     ts = cur_ts;
   }
+  void reset() {
+    this->reset(std::chrono::steady_clock::now());
+  }
+  void updateA0_T_AiFrom2dPose(float x, float y, float yaw) {
+    // +x: front, +y: left
+    A0_T_Ai << cosf(yaw), -sinf(yaw), x,
+               sinf(yaw),  cosf(yaw), y,
+                       0,          0, 1;
+  }
+  inline float getX() {
+    return A0_T_Ai(0, 2);
+  }
+  inline float getY() {
+    return A0_T_Ai(1, 2);
+  }
+  inline float getYaw() {
+    return atan2f(A0_T_Ai(1, 0), A0_T_Ai(0, 0));
+  }
 
-  V2 position;  // meter
-  float yaw;  // rad
+  Eigen::Matrix3f A0_T_Ai;
   float linear_velocity;  // m/s
   float angular_velocity;  // rad/s
   // TODO(hangmeng): unify the time with other sensor data like VIO
@@ -293,13 +304,24 @@ enum class MotionMode {
   MANUAL = 2,
   NONE = 3,
 };
-enum class ManualMotionAction {
-  FORWARD = 0,
-  BACKWARD = 1,
-  LEFT = 2,
-  RIGHT = 3,
-  IDLE = 4,
-  NONE = 5
+
+enum class LinearVelocityLevel {
+  BACKWARD_FAST = -3,
+  BACKWARD_NORMAL = -2,
+  BACKWARD_SLOW = -1,
+  IDLE = 0,
+  FORWARD_SLOW = 1,
+  FORWARD_NORMAL = 2,
+  FORWARD_FAST = 3,
+};
+enum class AngularVelocityLevel {
+  RIGHT_FAST = -3,
+  RIGHT_NORMAL = -2,
+  RIGHT_SLOW = -1,
+  IDLE = 0,
+  LEFT_SLOW = 1,
+  LEFT_NORMAL = 2,
+  LEFT_FAST = 3,
 };
 }  // namespace XP_TRACKER
 #endif  // XP_INCLUDE_XP_APP_API_POSE_PACKET_H_

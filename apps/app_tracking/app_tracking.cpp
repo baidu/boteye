@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,11 +33,14 @@
 // Parsing flags and logging
 #include <gflags/gflags.h>
 #include <glog/logging.h>
+#ifdef HAS_ROS
+#include <ros/ros.h>
+#endif
+#include <Eigen/Dense>
 #ifdef __CYGWIN__
 #include <Windows.h>  // for CPU binding
 #endif
 #ifdef HAS_RECOGNITION
-#include <fstream>
 #include <XP/util/aip/ocr.h> // NOLINT
 #include <XP/util/aip/image_classify.h> // NOLINT
 #include <XP/util/aip/face.h> // NOLINT
@@ -58,6 +61,8 @@
 #include <memory>  // unique_ptr
 #include <thread>
 #include <map>
+#include <fstream>
+
 #ifdef HAS_RECOGNITION
 std::string file_content;
 std::string ak = "EMPTY";
@@ -196,11 +201,15 @@ DEFINE_int32(recv_odom_port, -1, "the port that the UDP wheel odom message is re
  *
  * XP, XP2, XP3: XP, XP2, XP3 sensor
  */
-DEFINE_string(sensor_type, "XP", "XP, XP2, XP3, XPIRL, XPIRL2, ONE, HTTP");
+DEFINE_string(sensor_type, "XP", "XP, XP2, XP3, XPIRL, XPIRL2, BoteyeOne, HTTP, ROS");
 /** \brief Where does the video sensor open
  *
  */
-DEFINE_string(sensor_dev_path, "", "linux file to the video cam. Empty enables auto mode");
+DEFINE_string(dev_path, "", "linux file to the video cam. Empty enables auto mode");
+/** \brief xp sensor device ID
+ *
+ */
+DEFINE_string(sensor_id, "", "xp sensor ID, e.g. XPIRL3B18234005. Empty enables auto mode");
 /** \brief Save every image into one file
  *
  * The existing one will be refreshed
@@ -217,18 +226,6 @@ DEFINE_string(vis_img_save_path, "", "Save every visualization img"
  * Not showing X window saves computing time
  */
 DEFINE_bool(no_display, false, "do not show any X windows");
-/** \brief the width of the window for displaying
- *
- * The width of the window for displaying
- * If the width is narrower than the actual image, the program may crash
- */
-DEFINE_int32(display_img_w, 640, "the width of the window for displaying");
-/** \brief the width of the window for displaying
- *
- * The width of the window for displaying
- * If the width is narrower than the actual image, the program may crash
- */
-DEFINE_int32(display_img_h, 480, "the height of the window for displaying");
 
 /** \brief Whether or not pull imu from image data
  *
@@ -242,10 +239,15 @@ DEFINE_string(navigation_folder, "",
               "The folder navigation related files are generated. "
               "This should usually be record_path/navigation/");
 
-DEFINE_string(server_address, "", "Map server to connect with e.g. http://xxx:xxx, usb://xxx:xxx");
+DEFINE_string(server_address, "", "Map server to connect with e.g. https://xxx:xxx");
 DEFINE_string(stream_address,
               "",
               "rtmp address to stream sensor image, will auto set sensor device_id as suffix");
+
+DEFINE_string(recv_navi_cmd_topic,
+              "local_target_id",
+              "Subscribe this topic to receive navigation command");
+DEFINE_double(manual_control_keypress_timeout, 1.0, "Timeout key pressed after this threshold.");
 
 // TODO(Mingyu): use a flag to turn on NcsWorker with hardcoded config for now
 DEFINE_bool(use_ncs, false, "Turn on the NcsWorker with the hardcoded config for now");
@@ -255,6 +257,7 @@ DEFINE_bool(use_ncs, false, "Turn on the NcsWorker with the hardcoded config for
 DEFINE_bool(ver, false, "Print the configuration of the current build of libXP and exit");
 
 static XP_TRACKER::VioState vio_state;
+
 /** \brief Callback function for getting vio state
  *
  * This callback function will be registered inside the tracker.
@@ -263,6 +266,7 @@ static XP_TRACKER::VioState vio_state;
 void vio_state_callback(const XP_TRACKER::VioState &vio_state_) {
   vio_state = vio_state_;
 }
+
 #ifdef HAS_RECOGNITION
 DEFINE_bool(face_attribute, false, "enable face attribute");
 DEFINE_bool(ocr, false, "enable ocr");
@@ -473,7 +477,19 @@ int main(int argc, char **argv) {
 #endif
   google::InitGoogleLogging(argv[0]);
   google::ParseCommandLineFlags(&argc, &argv, false);
+  google::SetUsageMessage("Baidu Boteye SDK tracking / navigation tool");
   FLAGS_colorlogtostderr = 1;
+#ifdef HAS_ROS
+  // Setup ROS node
+  int ros_init_flag = 0;
+  ros::init(ros_init_flag, nullptr, "app_tracking");
+  if (!ros::master::check()) {
+    LOG(ERROR) << "ROS master has not started yet. "
+                  "Please run roscore and restart app_tracking.";
+    return -1;
+  }
+  ros::NodeHandle nh("boteye");
+#endif
 #ifndef HAS_OPENCV_VIZ
   if (FLAGS_viz3d) {
     FLAGS_viz3d = false;  // Opencv_viz is NOT available
@@ -488,8 +504,8 @@ int main(int argc, char **argv) {
 
   // Initialize XP sensor (or load from files)
   if (!FLAGS_load_path.empty()) {
-    if (!XP_TRACKER::init_data_loader(FLAGS_load_path)) {
-      LOG(ERROR) << "!XP_TRACKER::init_data_loader()";
+    if (!live::XpDriverInterface::getInstance().init_data_loader(FLAGS_load_path)) {
+      LOG(ERROR) << "!live::XpDriverInterface::getInstance().init_data_loader()";
       // TODO(mingyu): Check the image resolution
       return -1;
     }
@@ -500,16 +516,20 @@ int main(int argc, char **argv) {
         LOG(ERROR) << "!live::init_http_sensor()";
         return -1;
       }
+    } else if (FLAGS_sensor_type == "ROS") {
+      if (!live::XpDriverInterface::getInstance().init_ros_subscriber()) {
+        LOG(ERROR) << "!live::init_ros_subscriber()";
+        return -1;
+      }
     } else if (!live::XpDriverInterface::getInstance().init_XP_sensor(FLAGS_sensor_type,
                                                                       !FLAGS_disable_auto_gain,
                                                                       FLAGS_imu_from_image,
-                                                                      FLAGS_sensor_dev_path,
+                                                                      FLAGS_dev_path,
+                                                                      FLAGS_sensor_id,
                                                                       FLAGS_wb_mode)) {
       LOG(ERROR) << "!live::init_XP_sensor()";
       return -1;
     }
-    // Register data callbacks to drive the tracker
-    XP_TRACKER::init_live_sensor();
 
     // We have to initialize NcsWorker before registering data callback in order to pass
     // images to NcsWorker.
@@ -527,23 +547,39 @@ int main(int argc, char **argv) {
                                       network_means,
                                       network_scales);
     }
-    live::XpDriverInterface::getInstance().register_data_callbacks();
-
-    // If FLAGS_calib_file is not provided, try to load the calibration from the sensor.
-    // Need to store into a tmp file if a calib file is successfully loaded
-    if (FLAGS_calib_file.empty()) {
-      std::string calib_file_temp = "/tmp/calib_from_sensor.yaml";
-      XP::DuoCalibParam calib_from_sensor;
-      if (!live::XpDriverInterface::getInstance().auto_calib_load(&calib_from_sensor)) {
-        LOG(ERROR) << "Cannot load calib from the sensor.  Must provide a calib_file!";
-        return -1;
-      }
-      calib_from_sensor.WriteToYaml(calib_file_temp);
-      // TODO(huyuexiang): Fix this tmp calib file hack.
-      // Overwrite FLAGS_calib_file to point to the calib file read from the sensor.
-      FLAGS_calib_file = calib_file_temp;
-    }
   }
+
+  // If FLAGS_calib_file is not provided, try to load from
+  // 1) the calibration from the sensor (live mode)
+  // 2) the calibration from the load path (playback mode)
+  XP::DuoCalibParam calib_param;
+  if (FLAGS_calib_file.empty() && FLAGS_load_path.empty()) {
+    if (!live::XpDriverInterface::getInstance().auto_calib_load(&calib_param)) {
+      LOG(ERROR) << "Cannot load calib from the sensor.  Must provide a calib_file!";
+      return -1;
+    }
+  } else if (FLAGS_calib_file.empty() && !FLAGS_load_path.empty()) {
+    if (!live::XpDriverInterface::getInstance().load_calib_from_folder(FLAGS_load_path,
+                                                                       &calib_param)) {
+      return -1;
+    }
+  } else if (!live::XpDriverInterface::getInstance().load_calib_from_file(FLAGS_calib_file,
+                                                                          &calib_param)) {
+    return -1;
+  }
+
+  // Set the properties of cameras
+  const int img_h = calib_param.Camera.img_size.height;
+  const int img_w = calib_param.Camera.img_size.width;
+  const int display_h = std::max(img_h, 480);  // We set the minimal display size
+  const int display_w = std::max(img_w, 640);
+#ifdef __linux__
+  const char *env_display_p = std::getenv("DISPLAY");
+  if (env_display_p == nullptr) {
+    std::cout << "You are running headless OS. No X windows will be shown." << std::endl;
+    FLAGS_no_display = true;
+  }
+#endif
 
   if (FLAGS_vio_config.empty()) {
     const char *env_p = std::getenv("MASTER_DIR");
@@ -584,7 +620,7 @@ int main(int argc, char **argv) {
   if (!XP_TRACKER::init_tracker(FLAGS_vio_config,
                                 FLAGS_bow_dic_path,
                                 FLAGS_depth_param_path,
-                                FLAGS_calib_file,
+                                calib_param,
                                 !FLAGS_use_harris_feat,
                                 FLAGS_iba_for_vio)) {
     LOG(ERROR) << "Init tracker failed";
@@ -637,9 +673,10 @@ int main(int argc, char **argv) {
       if (!XP_TRACKER::init_robot_client(FLAGS_server_address,
                                          FLAGS_stream_address,
                                          device_id,
-                                         static_cast<unsigned int>(FLAGS_display_img_w),
-                                         static_cast<unsigned int>(FLAGS_display_img_h))) {
+                                         static_cast<unsigned int>(img_w),
+                                         static_cast<unsigned int>(img_h))) {
         LOG(ERROR) << "init_robot_client failed";
+        return -1;
       }
     }
 
@@ -672,16 +709,16 @@ int main(int argc, char **argv) {
           actuator_ptr.reset(new XP::EaiActuator(navi_param.Actuator, navi_param.Lidar));
         } else if (navi_param.Actuator.type == "gyroor") {
           actuator_ptr.reset(new XP::GyroorActuator(navi_param.Actuator, navi_param.Lidar));
-        } else if (navi_param.Actuator.type == "turtlebot3") {
 #ifdef HAS_ROS
+        } else if (navi_param.Actuator.type == "turtlebot3") {
           actuator_ptr.reset(new XP::RosActuator(navi_param.Actuator, navi_param.Lidar));
-#else
-          LOG(ERROR) << "Actuator type turtlebot3 is not supported in current build of XP";
-          return -1;
+        } else if (navi_param.Actuator.type == "xiaodu_ros") {
+          actuator_ptr.reset(new XP::RosXiaoduActuator(navi_param.Actuator, navi_param.Lidar));
 #endif
         } else {
           // [NOTE] Insert the user-customized actuator here
-          LOG(ERROR) << "Not supported actuator type: " << navi_param.Actuator.type;
+          LOG(ERROR) << "Not supported actuator type in current build of XP: "
+                     << navi_param.Actuator.type;
           return -1;
         }
         is_navigation_set =
@@ -701,19 +738,11 @@ int main(int argc, char **argv) {
       if (!is_navigation_set) {
         LOG(ERROR) << "Set navigation type: " << navi_param.Navigation.type << " failed";
       }
+    } else {
+      LOG(ERROR) << "You must specific a navigation_param.yaml file as navi_config";
+      return -1;
     }
   }
-  // The properties of cameras
-  // TODO(mingyu): Figure a way to auto-detect image width / height. Ow, visualization will crash
-  int img_h = FLAGS_display_img_h;
-  int img_w = FLAGS_display_img_w;
-#ifdef __linux__
-  const char *env_display_p = std::getenv("DISPLAY");
-  if (env_display_p == nullptr) {
-    std::cout << "You are running headless OS. No X windows will be shown." << std::endl;
-    FLAGS_no_display = true;
-  }
-#endif
 
 #ifdef HAS_RECOGNITION
   if (FLAGS_face_recognition || FLAGS_face_attribute || FLAGS_ocr) {
@@ -744,6 +773,10 @@ int main(int argc, char **argv) {
   std::unique_ptr<PoseDrawer3D> pose_viewer_3d_ptr;
 #endif
 
+#ifdef HAS_ROS
+  ros::Subscriber navi_cmd_sub =
+    nh.subscribe(FLAGS_recv_navi_cmd_topic, 1, XP_TRACKER::ros_navi_cmd_callback);
+#endif
   if (!FLAGS_no_display) {
     // Prepare viz3D or 2D draw-to canvas
     // show vio trajectory and mapper world
@@ -758,11 +791,11 @@ int main(int argc, char **argv) {
                                                 cv::Matx33f(K_left_array)));
     } else {
 #else
-      {
+    {
 #endif
       // Initialize top_down_and_camera_canvas
       if (FLAGS_show_simple) {
-        top_down_and_camera_canvas.create(img_h, img_w, CV_8UC3);
+        top_down_and_camera_canvas.create(display_h, display_w, CV_8UC3);
         // In simple view mode, trajectory view is overlaid on top of the left camera view
         top_down_view_canvas = top_down_and_camera_canvas;
         camera_view_canvas = top_down_and_camera_canvas;
@@ -771,12 +804,12 @@ int main(int argc, char **argv) {
         // Use tracker drawer
         // do not show trajectory history
         if (FLAGS_show_both) {
-          top_down_and_camera_canvas.create(img_h, img_h + img_w * 2, CV_8UC3);
+          top_down_and_camera_canvas.create(display_h, display_h + display_w * 2, CV_8UC3);
         } else {
-          top_down_and_camera_canvas.create(img_h, img_h + img_w, CV_8UC3);
+          top_down_and_camera_canvas.create(display_h, display_h + display_w, CV_8UC3);
         }
         top_down_view_canvas =
-            top_down_and_camera_canvas(cv::Rect(0, 0, img_h, img_h));
+            top_down_and_camera_canvas(cv::Rect(0, 0, display_h, display_h));
         // Trajectory view is an independent view
         XP_TRACKER::set_top_view_canvas(&top_down_view_canvas, FLAGS_show_simple);
 
@@ -789,12 +822,12 @@ int main(int argc, char **argv) {
         if (FLAGS_show_both) {
           camera_view_canvas =
               top_down_and_camera_canvas(cv::Rect(top_down_view_canvas.cols, 0,
-                                                  img_w * 2, img_h));
+                                                  display_w * 2, display_h));
           XP_TRACKER::set_camera_view_canvas(&camera_view_canvas, 2);
         } else {
           camera_view_canvas =
               top_down_and_camera_canvas(cv::Rect(top_down_view_canvas.cols, 0,
-                                                  img_w, img_h));
+                                                  display_w, display_h));
           XP_TRACKER::set_camera_view_canvas(&camera_view_canvas, 1);
         }
         cv::namedWindow("Top View & Left Camera");
@@ -805,7 +838,6 @@ int main(int argc, char **argv) {
     // Set depth canvas to start depth computation in tracker
     if (FLAGS_show_depth) {
       // depth is computed on half resolution
-      // use CAMERA_IMG_HEIGHT CAMERA_IMG_WIDTH as dim to see distorted images
       // Set depth view canvas even if viz3d is used
       depth_view_canvas.create(img_h, img_w, CV_8UC3);
       XP_TRACKER::set_depth_view_canvas(&depth_view_canvas);
@@ -815,9 +847,7 @@ int main(int argc, char **argv) {
       }
     }
     if (is_navigation_set) {
-      // eai is computed on half resolution
-      // use CAMERA_IMG_HEIGHT CAMERA_IMG_WIDTH as dim to see distorted images
-      navi_canvas.create(480, 1120, CV_8UC3);
+      navi_canvas.create(display_h, display_h + display_w, CV_8UC3);
       XP_TRACKER::set_navi_canvas(&navi_canvas);
       if (!FLAGS_viz3d) {
         cv::namedWindow("Navigator");
@@ -844,7 +874,11 @@ int main(int argc, char **argv) {
     char key_pressed = 0;
     // usleep(50000);
     int draw_counter = 0;
+    std::chrono::steady_clock::time_point manual_action_tp = std::chrono::steady_clock::now();
     while (!ESC_pressed) {
+#ifdef HAS_ROS
+      ros::spinOnce();
+#endif
       // A simple illustration on how use depth view to detect obstacle
       if (FLAGS_show_depth) {
         constexpr float alert_depth = 1;
@@ -953,41 +987,76 @@ int main(int argc, char **argv) {
           }
         } else if (key_pressed == 'S' || key_pressed == 's') {
           XP_TRACKER::set_static(true);
-        } else if (key_pressed == 'M' || key_pressed == 'm') {
+        } else if (key_pressed == 'W' || key_pressed == 'w') {
           XP_TRACKER::set_static(false);
 #ifdef HAS_RECOGNITION
-          } else if (key_pressed == 'r') {
-            run_flag = !run_flag;
-            if (run_flag) {
-              std::thread(thread_apis).detach();
-            }
+        } else if (key_pressed == 'r') {
+          run_flag = !run_flag;
+          if (run_flag) {
+            std::thread(thread_apis).detach();
+          }
 #endif
         } else if (key_pressed == 10) {
           // CR is pressed
           XP_TRACKER::finish_set_loop_targets();
+        } else if (key_pressed == 'P' || key_pressed == 'p') {
+          // {P}rint the current actuator 2D pose as a local target pose and record it into a file (
+          // "/tmp/target_id_pose.txt").  Require to use navigator.
+          if (!XP_TRACKER::print_current_local_target_2d_pose()) {
+            LOG(ERROR) << "print_current_local_target_2d_pose NOT working";
+          }
+        } else if (key_pressed == 'M' || key_pressed == 'm') {
+          // {M}ark the current mapper pose in the map.  The marked waypoints (poses) will be
+          // adjusted by loop closure accordingly if not pre-built.
+          if (!XP_TRACKER::mark_current_waypoint()) {
+            LOG(ERROR) << "mark_current_waypoint NOT working";
+          }
+          // TODO(meng): add fast speed level logic
         } else if (key_pressed == 'I' || key_pressed == 'i') {
           // up is pressed
+          manual_action_tp = std::chrono::steady_clock::now();
           XP_TRACKER::set_navigator_motion_mode(XP_TRACKER::MotionMode::MANUAL);
-          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::ManualMotionAction::FORWARD);
+          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::LinearVelocityLevel::FORWARD_NORMAL,
+                                                  XP_TRACKER::AngularVelocityLevel::IDLE);
         } else if (key_pressed == 'K' || key_pressed == 'k') {
           // down is pressed
+          manual_action_tp = std::chrono::steady_clock::now();
           XP_TRACKER::set_navigator_motion_mode(XP_TRACKER::MotionMode::MANUAL);
-          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::ManualMotionAction::BACKWARD);
+          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::LinearVelocityLevel::BACKWARD_NORMAL,
+                                                  XP_TRACKER::AngularVelocityLevel::IDLE);
         } else if (key_pressed == 'J' || key_pressed == 'j') {
           // left is pressed
+          manual_action_tp = std::chrono::steady_clock::now();
           XP_TRACKER::set_navigator_motion_mode(XP_TRACKER::MotionMode::MANUAL);
-          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::ManualMotionAction::LEFT);
+          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::LinearVelocityLevel::IDLE,
+                                                  XP_TRACKER::AngularVelocityLevel::LEFT_NORMAL);
         } else if (key_pressed == 'L' || key_pressed == 'l') {
           // right is pressed
+          manual_action_tp = std::chrono::steady_clock::now();
           XP_TRACKER::set_navigator_motion_mode(XP_TRACKER::MotionMode::MANUAL);
-          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::ManualMotionAction::RIGHT);
+          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::LinearVelocityLevel::IDLE,
+                                                  XP_TRACKER::AngularVelocityLevel::RIGHT_NORMAL);
         } else if (key_pressed == ' ' || key_pressed == 32) {
           // idle is pressed
           std::cout << "exit manual control mode" << std::endl;
-          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::ManualMotionAction::IDLE);
+          XP_TRACKER::set_navigator_motion_mode(XP_TRACKER::MotionMode::MANUAL);
+          XP_TRACKER::set_navigator_manual_action(XP_TRACKER::LinearVelocityLevel::IDLE,
+                                                  XP_TRACKER::AngularVelocityLevel::IDLE);
+        } else if (key_pressed == 'N' || key_pressed == 'n') {  // "N" stands for navigation
           XP_TRACKER::set_navigator_motion_mode(XP_TRACKER::MotionMode::CONTROL);
         } else if (key_pressed == static_cast<char>(-1)) {
-            // nothing is pressed
+          // nothing is pressed
+          std::chrono::steady_clock::time_point curr_tp = std::chrono::steady_clock::now();
+          float no_key_input_sec =
+            std::chrono::duration_cast<std::chrono::seconds>(curr_tp - manual_action_tp).count();
+          if (no_key_input_sec > FLAGS_manual_control_keypress_timeout) {
+            manual_action_tp = std::chrono::steady_clock::now();
+            // only do this when robot_client is disabled
+            if (FLAGS_server_address.empty()) {
+              XP_TRACKER::set_navigator_manual_action(XP_TRACKER::LinearVelocityLevel::IDLE,
+                                                      XP_TRACKER::AngularVelocityLevel::IDLE);
+            }
+          }
         } else {
           LOG(ERROR) << "Key " << static_cast<int32_t>(key_pressed)
                      << " is pressed but unknown";
@@ -997,20 +1066,16 @@ int main(int argc, char **argv) {
     }
     cv::destroyAllWindows();
   } else {
-    // FLAGS_no_display is set
+    // FLAGS_no_display is set (HEADLESS mode)
     while (true) {
-#ifndef __CYGWIN__
-      if (!FLAGS_vis_img_save_path.empty()) {
-        if (live::XpDriverInterface::getInstance().g_img_l_ptr->rows > 0) {
-          cv::imwrite(FLAGS_vis_img_save_path, *live::XpDriverInterface::getInstance().g_img_l_ptr);
-          usleep(100000);  // 10 Hz
-        }
-      }
-#endif
       if (!XP_TRACKER::is_duo_vio_tracker_running()) {
         std::cout << "duo_vio_tracker stops running." << std::endl;
         break;
       }
+#ifdef HAS_ROS
+      ros::spinOnce();
+#endif
+      usleep(100000);  // 10 Hz
     }
   }
 
@@ -1031,10 +1096,9 @@ int main(int argc, char **argv) {
     }
   }
 
-  XP_TRACKER::stop_tracker();
+  XP_TRACKER::stop_tracker("app_tracking main");
   live::XpDriverInterface::getInstance().stop();  // Stop spinning XP sensor or http stream
-
   // Linux crashes at the end if release is not explicitly called
   live::XpDriverInterface::getInstance().g_img_l_ptr->release();
   return 0;
-}
+}  // NOLINT

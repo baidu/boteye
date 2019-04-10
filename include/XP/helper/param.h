@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -95,7 +95,12 @@ class DuoCalibParam : public ParamBase {
     std::vector<cv::Mat> undistort_map_op2_lr;
     std::vector<cv::Matx33f> cv_undist_K_lr;
     std::vector<Eigen::Matrix4f, Eigen::aligned_allocator<Eigen::Matrix4f>> undist_D_T_C_lr;
+    // the following can be computed from extrinsics and intrinsics
     cv::Matx44f Q;  // 4x4 convert disparity to depth. See cv::reprojectImageTo3D
+    // for using cv::undistortPoints
+    std::vector<cv::Mat> stereo_rectify_P_lr;  // the type is CV_64F
+    // See the use of R in TEST(StereoDepth, show_disparity_matching_error)
+    std::vector<cv::Mat> stereo_rectify_R_lr;  // the type is CV_64F
   } Camera;
 
   Eigen::Matrix3f C_R_B;
@@ -109,7 +114,8 @@ class DuoCalibParam : public ParamBase {
     XPIRL = 4,
     XPIRL2 = 5,
     XPIRL3 = 6,
-    XPIRL3_A = 7
+    XPIRL3_A = 7,
+    ONE = 8
   } sensor_type;
 };
 

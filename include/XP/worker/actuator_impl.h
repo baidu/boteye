@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,14 +17,6 @@
 #ifndef XP_INCLUDE_XP_WORKER_ACTUATOR_IMPL_H_
 #define XP_INCLUDE_XP_WORKER_ACTUATOR_IMPL_H_
 
-#ifdef HAS_ROS
-#include <ros/ros.h>
-#include <sensor_msgs/LaserScan.h>
-#include <nav_msgs/Odometry.h>
-#include <geometry_msgs/Twist.h>
-#include <diagnostic_msgs/DiagnosticArray.h>
-#endif
-
 #include <XP/helper/param.h>  // for NaviParam::ActuatorConfig_t
 #include <XP/worker/actuator.h>
 #include <XP/worker/scanner_impl.h>
@@ -38,20 +30,20 @@ namespace XP {
 
 namespace internal {
 // Convert input buffer into a string with range [start, end)
-std::string buf_to_string(uint8_t* buf, int start, int end);
+std::string buf_to_string(uint8_t *buf, int start, int end);
 
 }  // namespace internal
 
 class EaiActuator : public Actuator {
  public:
   EaiActuator(const NaviParam::ActuatorConfig_t &actuator_param,
-               const NaviParam::LidarConfig_t &lidar_param);
+              const NaviParam::LidarConfig_t &lidar_param);
   ~EaiActuator();
 
   bool init() override;
   void update() override;
   bool stopActProcess() override;
-  bool control(const XP_TRACKER::GuideMessage& guide_message) override;
+  bool control(const XP_TRACKER::GuideMessage &guide_message) override;
   bool updateWheelOdom();
   bool updateWheelEncoders_lr(int *l_reading, int *r_reading);
 
@@ -87,7 +79,7 @@ class KincoActuator : public Actuator {
   bool init() override;
   void update() override;
   bool stopActProcess() override;
-  bool control(const XP_TRACKER::GuideMessage& guide_message) override;
+  bool control(const XP_TRACKER::GuideMessage &guide_message) override;
 
  public:
   // Dilili desk specific functions
@@ -103,15 +95,15 @@ class KincoActuator : public Actuator {
   bool resetAndEnableSeparateWheelControl();
   bool allowForcedMoving(bool allow_forced_moving);
   bool sendKincoCommand(uint32_t cmd, int32_t data,
-                        const std::string& ns = "",
+                        const std::string &ns = "",
                         int id = 0x01,  // wheel 2 is 0x02
-                        uint32_t* res = nullptr);
+                        uint32_t *res = nullptr);
   bool setWheelRps_lr(int rps_l, int rps_r);
 
  private:
   bool updateUltrasoundObstacle();
   bool updateWheelOdom();
-  bool updateWheelEncoders_lr(int* l_reading, int* r_reading);
+  bool updateWheelEncoders_lr(int *l_reading, int *r_reading);
 
  private:
   // Device related
@@ -131,26 +123,6 @@ class KincoActuator : public Actuator {
   int prev_tick_counts_l_;
   int prev_tick_counts_r_;
   float dist_per_tick_;
-
-  float min_valid_scan_dist_;
-  float lidar_obs_dist_thres_;
-  float lidar_obs_angle_thres_;
-
-  const Eigen::Matrix4f T_AL_;
-};
-
-class XiaoduActuator : public SampleActuator {
- public:
-  XiaoduActuator(const XP::NaviParam::ActuatorConfig_t &actuator_param,
-                 const XP::NaviParam::LidarConfig_t &lidar_param,
-                 const XP_TRACKER::GuideMessageCallback& g_callback,
-                 const XP_TRACKER::WheelOdomMessageCallback& wo_callback);
-
-  bool run() override;
-
- protected:
-  void threadRecvUDPMessage() override;
-  bool recvUDPWheelOdom(XP_TRACKER::WheelOdomMessage * wheel_odom_message) override;
 };
 
 class GyroorActuator : public Actuator {
@@ -170,7 +142,7 @@ class GyroorActuator : public Actuator {
   bool init() override;
   void update();
   bool stopActProcess() override;
-  bool control(const XP_TRACKER::GuideMessage& guide_message) override;
+  bool control(const XP_TRACKER::GuideMessage &guide_message) override;
 
  public:
   bool powerOnSeparateWheels();   // before moving
@@ -178,7 +150,7 @@ class GyroorActuator : public Actuator {
   bool allowForcedMoving(bool allow_forced_moving);
   bool sendSerialCommand(const Payload &payload,
                          const std::vector<uint8_t> &data,
-                         const std::string& ns);
+                         const std::string &ns);
 
  private:
   void updateUltrasoundObstacle();
@@ -202,16 +174,10 @@ class GyroorActuator : public Actuator {
   int prev_tick_counts_l_;
   int prev_tick_counts_r_;
   float dist_per_tick_;
-
-  float min_valid_scan_dist_;
-  float lidar_obs_dist_thres_;
-  float lidar_obs_angle_thres_;
-
-  const Eigen::Matrix4f T_AL_;
 };
 
 #ifdef HAS_ROS
-  // This actuator controls a ROS base
+// This actuator controls a ROS base
 class RosActuator : public Actuator {
  public:
   RosActuator(const NaviParam::ActuatorConfig_t &actuator_param,
@@ -222,25 +188,21 @@ class RosActuator : public Actuator {
   bool run() override;
   void update() override;
   bool stopActProcess() override;
-  bool control(const XP_TRACKER::GuideMessage& guide_message) override;
+  bool control(const XP_TRACKER::GuideMessage &guide_message) override;
 
- private:
-  void odomCallback(const nav_msgs::OdometryConstPtr& odom);
-  void diagCallback(const diagnostic_msgs::DiagnosticArrayConstPtr& diag);
+ protected:
+  virtual void odomCallback(const nav_msgs::OdometryConstPtr &odom);
+  virtual void diagCallback(const diagnostic_msgs::DiagnosticArrayConstPtr &diag);
+  virtual void processWheelOdom(const float wo_x, const float wo_y, const float wo_yaw,
+                                const float wo_linear_vel, const float wo_angular_vel,
+                                const int64_t wo_tp_nanosec);
 
- private:
-  // Worker
-
-
+ protected:
   // Device related
   bool odom_first_;
-  float min_valid_scan_dist_;
-  float lidar_obs_dist_thres_;
-  float lidar_obs_angle_thres_;
   int64_t ros_header_time_nanosec_;
-  XP_TRACKER::WheelOdomState odom_first_state_;
+  Eigen::Matrix3f WO_origin_T_P0_;
   std::chrono::time_point<std::chrono::steady_clock> odom_sample_start_tp_;
-  const Eigen::Matrix4f T_AL_;
   int battery_diag_;
   const std::string odom_topic_;
   const std::string diag_topic_;
@@ -250,6 +212,24 @@ class RosActuator : public Actuator {
   ros::Subscriber odom_sub_;
   ros::Subscriber diag_sub_;
 };
+
+class RosXiaoduActuator : public RosActuator {
+ public:
+  RosXiaoduActuator(const NaviParam::ActuatorConfig_t &actuator_param,
+                    const NaviParam::LidarConfig_t &lidar_param);
+  ~RosXiaoduActuator();
+  bool init() override;
+  bool control(const XP_TRACKER::GuideMessage &guide_message) override;
+
+ protected:
+  void odomCallback(const nav_msgs::OdometryConstPtr &odom) override;
+  void diagCallback(const diagnostic_msgs::DiagnosticArrayConstPtr &diag) override;
+
+ private:
+  const std::string navi_status_topic_;
+  ros::Publisher navi_status_pub_;
+};
+
 #endif  // HAS_ROS
 }  // namespace XP
 #endif  //  XP_INCLUDE_XP_WORKER_ACTUATOR_IMPL_H_

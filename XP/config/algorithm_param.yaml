@@ -11,13 +11,8 @@ MappingMode:
   # feat_type can only be nature, tag, or mixed. "mixed" is a mixture of tag + nature features
   # Either tag or mixed will enable april tag detection in mapper
   feat_type: nature
-  # tag_family can only be "36h11" or "25h7" for now. Used when feat_type requires april tag detection
-  tag_family: 36h11
-  # mirror the tag_detection or not, which is a special mode for projected april tag
-  mirror_tag_detection: false
   # mapper_type can only be normal, reloc_only, or disabled
   mapper_type: normal
-  use_vio_orientation_as_absolute: true  # use vio orientation as absolute reference or not
   # if a rig has high BOW score but larger spatial distance
   # than max_neighour_rig_dis, do not count it as key rig
   # vio does not require cov computed in mapping
@@ -26,6 +21,8 @@ MappingMode:
   modify_prescan_map: false
   ignore_feat_on_floor: false
   fix_height_value: false  # this also affects vio tracker
+  # xd_mode: 1 or 2 will override feat_type and mapper_type above.
+  xd_mode: 0  # 0: off, 1: xd record map, 2: xd reloc mode
 Mapping:
   max_feature_search_range: 0.05  # 20 / 400
   min_keyrig_gap_num: 10
@@ -38,6 +35,8 @@ Mapping:
   max_neighbour_rig_dis: 3.0
   orb_match_dist_thresh: 51 # range is 0 - 255
   orb_match_thresh_test_ratio: 0.8
+  keyrig_tran_thresh: 0.2  # Insert a keyrig when translation (m) is larger than this
+  keyrig_rot_thresh: 25.0   # Insert a keyrig when rotation (deg) is larger than this
   local_ba_min_movalble_rig_num: 1
   local_ba_max_movalble_rig_num: 3
   feat_det_num: 300 # uniform radius will limit the number of points
@@ -57,12 +56,10 @@ Tracking:
   orb_match_dist_thresh: 51  # range is 0 - 255
   orb_match_thresh_test_ratio: 0.9
   feature_uncertainty: 10
-  # Turn on either use_of_id or use_april_tag will force vio config matchWithId to true
+  # Turn on use_of_id will force vio config matchWithId to true
   use_of_id: true
   undistort_before_vio: false
-  use_april_tag: false
   slave_det: direct # epi or OF or direct
-  negative_image: false  # Negative images at the beginning of the tracking pipeline
 Reloc:
   min_reloc_match_score: 1.175494e-38
   min_3d_2d_num: 25
@@ -78,6 +75,9 @@ Reloc:
   check_with_noncentral_rel: true
   redo_bootstrap: true       # re-bootstrap the query pose to the best ref pose
   use_input_rotation: false  # only solve translation
+  min_reloc_tag_corners: 8  # Minimal tag corner 2D-3D observations required for tag reloc
+  prune_bad_tags: false   # Heuristically prune bad tags from solvePnPRansac
+  refine_tag_depth: 5.0  # Refine (ignore) tag map points that are further than this threshold
 Depth:
   horizontal_bucket_num: 30
   height_below_cam: -0.5 # Used to filter out the depth from the ground (m)

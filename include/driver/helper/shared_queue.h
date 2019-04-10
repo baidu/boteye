@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -64,7 +64,7 @@ class shared_queue {
     }
   }
 
-  // Use this function to kill the shared_queue before the application exists
+  // Use this function to kill the shared_queue before the application exits
   // to prevent potential deadlock.
   void kill() {
     kill_ = true;

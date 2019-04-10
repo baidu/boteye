@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,10 @@
 #include <functional>
 #include <memory>
 #include <string>
+
+#ifdef HAS_ROS
+#include <std_msgs/Int32.h>
+#endif
 
 namespace XP_TRACKER {
 
@@ -53,26 +57,10 @@ bool init_ncs_worker(const std::string& output_layer_string,
 bool set_ncs_canvas(cv::Mat* canvas);
 
 /**
- * \brief Initialize the sensor to run with a live sensor.  The user is responsible to properly
- *        initilize the live sensor, register the data callbacks, and start/stop running.
- * \return success or not
- */
-bool init_live_sensor();
-
-/**
- * \brief Initialzie the data loader that loads images and imu from a folder.
- *        The data loader will disable all kinds of live sensor
- * \param folder_path where to load the data (similar to record_path)
- * \return success or not
- */
-bool init_data_loader(const std::string& folder_path);
-
-/**
  * \brief Initialize tracking algorithms
  * \param vio_config Config files controling vio algorithm
  * \param bow_dic_path Bag of words file to load
- * \param cam_calib_file_path Camera calibration file to load.  If empty, camera calibration
- *        will be loaded from DUO device directly.
+ * \param calib_param Camera calibration param.  Must not be empty
  * \param use_fast_feat Use fast (or harris) for feature detection
  * \param use_iba_for_vio Use IBA as the backend for VIO
  * \return success or not
@@ -80,7 +68,7 @@ bool init_data_loader(const std::string& folder_path);
 bool init_tracker(const std::string& vio_config,
                   const std::string& bow_dic_path,
                   const std::string& depth_param_path,
-                  const std::string& cam_calib_file_path,
+                  const XP::DuoCalibParam &calib_param,
                   const bool use_fast_feat,
                   const bool use_iba_for_vio);
 /**
@@ -173,14 +161,32 @@ bool set_navigator_trajectory(const std::string &navigation_folder);
  * TODO(mingyu): Put back descriptions
  */
 bool set_navigator_mouse_data(const XP::MouseData& mouse_data);
+/**
+ * TODO(meng): Put back descriptions
+ */
+bool search_local_target_2d_pose(const int local_target_id,
+                                 float *target_x, float *target_y, float *target_theta,
+                                 bool *need_rotate_before_track);
+#ifdef HAS_ROS
+/**
+ * TODO(meng): Put back descriptions
+ */
+void ros_navi_cmd_callback(std_msgs::Int32 local_target_id);
+#endif
 
 /**
- * set navigator dest waypoint.
+ * @brief set navigator target waypoint.
  * @param x x of slam coordinate
  * @param y y of slam coordinate
  * @return true if set dest xy succeed
  */
-bool set_navigator_dest_xy(float world_x, float world_y);
+bool set_navigator_target_xy_theta(const float world_x, const float world_y, const float theta);
+
+bool set_navigator_target_xy(const float world_x, const float world_y);
+
+bool set_navigator_target_theta(const float theta);
+
+bool set_navigator_target_id(const int target_id, const bool need_rotate_before_track = false);
 
 /**
  * set navigator motion mode.
@@ -190,11 +196,13 @@ bool set_navigator_dest_xy(float world_x, float world_y);
 bool set_navigator_motion_mode(const XP_TRACKER::MotionMode& motion_mode);
 
 /**
- * set navigator manual motion action.
- * @param navigation manual motion action
- * @return true if set manual motion action succeed
+ * set navigator target manual motion velocity.
+ * @param command linear velocity level
+ * @param command angular velocity level
+ * @return true if set target manual motion velocity succeed
  */
-bool set_navigator_manual_action(const XP_TRACKER::ManualMotionAction& motion_action);
+bool set_navigator_manual_action(const XP_TRACKER::LinearVelocityLevel linear_vel_lvl,
+                                 const XP_TRACKER::AngularVelocityLevel angular_vel_lvl);
 
 /**
  * when navigator in loop mode, call this function to finish set loop target waypoints.
@@ -227,7 +235,7 @@ bool run_tracker_MT();
  * \brief Stop the multi-threaded program properly
  * \return success or not
  */
-bool stop_tracker();
+bool stop_tracker(const std::string& ns);
 /**
  * \brief Draw all the pre-set canvas once
  */
@@ -302,6 +310,21 @@ bool get_mapper_reloc_xyz_cov(float* cov_3x3);
  * \return success or not
  */
 bool get_vio_latest_3d_pose(float* W_T_D_4x4);
+
+/**
+ * TODO(meng): put back description
+ */
+bool get_actuator_latest_3d_pose(float *W_T_A_4x4);
+
+/**
+ * \brief Get a 2D pose based of the {A}ctuator w.r.t to the {W}orld.
+ *        Both {A} and {W} coordinates are RFU (xyz).
+ * \param x A pointer of x, the position of the center of {A} in {W}'s x axis.
+ * \param y A pointer of y, the position of the center of {A} in {W}'s y axis.
+ * \param yaw A pointer of yaw, the heading direction (+y axis of {A}) in {W}'s xy plane.
+ *            Say the heading direction of {A} in {W} xy-plane is (hx, hy), yaw = atan2(hy, hx)
+ */
+bool get_actuator_latest_2d_pose(float *x, float* y, float* yaw);
 
 /**
  * \brief Get camera intrinsics
@@ -433,5 +456,15 @@ bool set_data_rate_callback(const DataRateCallback& data_rate_callback);
  *        as there are quite some functionalities that are enabled / disabled during compile time
  */
 void print_XP_configuration();
+
+/**
+ * TODO(mingyu): Put back descriptions
+ */
+bool print_current_local_target_2d_pose(const std::string& tgt_filename = "");
+/**
+ * TODO(mingyu): Put back descriptions
+ */
+bool mark_current_waypoint();
+
 }  // namespace XP_TRACKER
 #endif  // __XP_TRACKER_H__  // NOLINT

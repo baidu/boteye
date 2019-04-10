@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,15 +18,23 @@
 #define XP_INCLUDE_XP_WORKER_SCANNER_H_
 
 #include <navigation/navigation_type.h>
+#include <XP/helper/param_internal.h>  // for NaviParam
+#include <string>
 
 class Scanner {
  public:
-  Scanner() :
-    is_initialzed_(false),
-    is_scan_started_(false),
-    valid_data_count_(0),
-    min_angle_rad_(-1.0),
-    max_angle_rad_(-1.0) {
+  explicit Scanner(const XP::NaviParam::LidarConfig_t &lidar_param) :
+      is_initialzed_(false),
+      is_scan_started_(false),
+      min_valid_scan_dist_for_robot_(lidar_param.min_valid_scan_dist_for_robot),
+      scan_size_(lidar_param.scan_size),
+      scan_time_(lidar_param.scan_time),
+      time_increment_(lidar_param.time_increment),
+      range_min_(lidar_param.range_min),
+      range_max_(lidar_param.range_max),
+      angle_min_(lidar_param.angle_min),
+      angle_max_(lidar_param.angle_max),
+      angle_increment_(lidar_param.angle_increment) {
   }
 
   virtual ~Scanner() {}
@@ -45,23 +53,34 @@ class Scanner {
   virtual bool dispose() { return true; }
 
   virtual bool checkHealth() { return true; }
-  virtual void getValidAngleRange(float * min_angle_rad, float * max_angle_rad) {
-    *min_angle_rad = min_angle_rad_;
-    *max_angle_rad = max_angle_rad_;
-  }
-  virtual int getValidDataCount() { return valid_data_count_; }
   // Should call updateScan() before calling this function.
-  virtual void getScanMessage(Navigation::ScanMessage* scan_msg) { *scan_msg = scan_msg_; }
+  virtual void getScanMessage(Navigation::ScanMessage *scan_msg) const { *scan_msg = scan_msg_; }
   virtual void updateScan() = 0;
+  virtual bool isBeamValid(const float distance_beam) const {
+    return distance_beam > min_valid_scan_dist_for_robot_;
+  }
+  virtual int getScanSize() const { return scan_size_; }
+  virtual float getScanDuration() const { return scan_time_; }
+  virtual float getTimeIncrement() const { return time_increment_; }
+  virtual float getRangeMin() const { return range_min_; }
+  virtual float getRangeMax() const { return range_max_; }
+  virtual float getAngleMin() const { return angle_min_; }
+  virtual float getAngleMax() const { return angle_max_; }
+  virtual float getAngleIncrement() const { return angle_increment_; }
 
  protected:
   bool is_initialzed_;
   bool is_scan_started_;
   Navigation::ScanMessage scan_msg_;
-  // TODO(meng): need to be used
-  int valid_data_count_;
-  float min_angle_rad_;
-  float max_angle_rad_;
+  const float min_valid_scan_dist_for_robot_;
+  int scan_size_;
+  const float scan_time_;
+  const float time_increment_;
+  const float range_min_;
+  const float range_max_;
+  float angle_min_;
+  float angle_max_;
+  const float angle_increment_;
 };
 
 #endif  // XP_INCLUDE_XP_WORKER_SCANNER_H_

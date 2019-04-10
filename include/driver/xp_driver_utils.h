@@ -13,18 +13,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *****************************************************************************/
-#ifndef XP_INCLUDE_XP_UTIL_CALIBRATION_UTILS_H_
-#define XP_INCLUDE_XP_UTIL_CALIBRATION_UTILS_H_
-#include <opencv2/core.hpp>
-#include <vector>
-namespace XP {
-bool check_grid_point_density(const std::vector<std::vector<cv::Point2f> >& detected_corners,
-                              const cv::Size& img_size,
-                              const float min_ratio,
-                              const int valid_radius,
-                              const cv::Point2f& pinhole,
-                              const bool verbose = false,
-                              cv::Mat* visualize_img = nullptr);  // mark the radius and squares
+#ifndef INCLUDE_DRIVER_XP_DRIVER_UTILS_H_
+#define INCLUDE_DRIVER_XP_DRIVER_UTILS_H_
 
-}  // namespace XP
-#endif  // XP_INCLUDE_XP_UTIL_CALIBRATION_UTILS_H_
+#include <driver/base_sensor_driver.h>
+#include <driver/XP_sensor_driver.h>
+#include <driver/xp_driver_config.h>
+#ifdef __RK_ENABLED__
+#include <driver/rk_sensor_driver.h>
+#endif
+#include <string>
+
+namespace XPDRIVER {
+bool init_sensor(const std::string& sensor_type,
+                 const bool auto_gain,
+                 const bool imu_from_image,
+                 const std::string& sensor_dev_path,
+                 const std::string& sensor_dev_id,
+                 const std::string& wb_mode,
+                 std::unique_ptr<XPDRIVER::SensorMultithread>& sensor_ptr);  // NOLINT
+
+}  // XPDRIVER
+#endif  // INCLUDE_DRIVER_XP_DRIVER_UTILS_H_

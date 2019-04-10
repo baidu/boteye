@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,8 @@
 #include <XP/helper/timer.h>
 #include <XP/helper/param.h>
 #include <XP/helper/tag_detector.h>
-#include <driver/XP_sensor_driver.h>
+#include <driver/xp_driver_config.h>
+#include <driver/xp_driver_utils.h>
 #include <XP/util/calibration_utils.h>
 #include <XP/depth/depth_utils.h>
 #include <XP/util/feature_utils.h>
@@ -50,7 +51,7 @@
 using std::cout;
 using std::endl;
 using std::vector;
-using XPDRIVER::XpSensorMultithread;
+using XPDRIVER::SensorMultithread;
 using std::chrono::steady_clock;
 using XPDRIVER::SensorType;
 DEFINE_bool(auto_gain, false, "turn on auto gain");
@@ -67,7 +68,7 @@ DEFINE_bool(horizontal_line, false, "show green horizontal lines for disparity c
 DEFINE_bool(imu_from_image, false, "Load imu from image. Helpful for USB2.0");
 DEFINE_bool(orb_verify, false, "Use ORB feature matching to verify calib result");
 DEFINE_bool(save_image_bin, false, "Do not save image bin file");
-DEFINE_string(sensor_type, "", "XP or XP2 or XP3 or FACE or XPIRL or XPIRL2, XPIRL3, XPIRL3_A");
+DEFINE_string(sensor_type, "", "XP or XP2 or XP3 or XPIRL or XPIRL2, XPIRL3, XPIRL3_A, BoteyeOne");
 DEFINE_bool(show_hist, false, "Show image histogram (left and right)");
 DEFINE_bool(spacebar_mode, false, "only save img when press space bar");
 DEFINE_string(record_path, "", "path to save images. Set empty to disable saving");
@@ -119,8 +120,8 @@ std::atomic<bool> save_img, save_ir_img;
 SensorType XP_sensor_type;
 // we use the first imu to approx img time based on img counter
 cv::Size g_img_size;
-// The unique instance of XpSensorMultithread
-std::unique_ptr<XPDRIVER::XpSensorMultithread> g_xp_sensor_ptr;
+// The unique instance of SensorMultithread
+std::unique_ptr<XPDRIVER::SensorMultithread> g_xp_sensor_ptr;
 XP::AprilTagDetector g_ap_detector;
 cv::BFMatcher g_orb_matcher(cv::NORM_HAMMING);
 ImgForShow g_img_lr_display, g_img_lr_IR_display;
@@ -131,8 +132,8 @@ vector<ImgForShow> g_visualize_img_lr(2);
 bool g_has_IR;
 bool g_calib_loaded = false;
 XP::DuoCalibParam g_calib_param;
-// Callback functions for XpSensorMultithread
-// [NOTE] These callback functions have to be light-weight as it *WILL* block XpSensorMultithread
+// Callback functions for SensorMultithread
+// [NOTE] These callback functions have to be light-weight as it *WILL* block SensorMultithread
 void image_data_callback(const cv::Mat& img_l, const cv::Mat& img_r, const float ts_100us,
                          const std::chrono::time_point<std::chrono::steady_clock>& sys_time) {
   if (run_flag) {
@@ -1079,9 +1080,10 @@ void thread_write_imu_data() {
   VLOG(1) << "========= thread_write_imu_data thread ends";
 }
 
-bool auto_calib_load(const std::unique_ptr<XPDRIVER::XpSensorMultithread>& xp_sensor_ptr,
-                    const std::string& calib_yaml_file,
-                    XP::DuoCalibParam* calib_param) {
+// TODO(huyuexiang) wrap "auto_calib_load" in driver util
+bool auto_calib_load(const std::unique_ptr<XPDRIVER::SensorMultithread>& xp_sensor_ptr,
+                     const std::string& calib_yaml_file,
+                     XP::DuoCalibParam* calib_param) {
   if (!calib_yaml_file.empty()) {
     calib_param->LoadFromYaml(calib_yaml_file);
     return true;
@@ -1122,15 +1124,14 @@ int main(int argc, char** argv) {
   }
 #endif
   run_flag = true;
-  g_xp_sensor_ptr.reset(new XpSensorMultithread(FLAGS_sensor_type,
-                                                FLAGS_auto_gain,
-                                                FLAGS_imu_from_image,
-                                                FLAGS_dev_name,
-                                                FLAGS_wb_mode));
-  if (g_xp_sensor_ptr->init()) {
-    VLOG(1) << "XpSensorMultithread init succeeded!";
-  } else {
-    LOG(ERROR) << "XpSensorMultithread failed to init";
+  if (!XPDRIVER::init_sensor(FLAGS_sensor_type,
+                             FLAGS_auto_gain,
+                             FLAGS_imu_from_image,
+                             FLAGS_dev_name,
+                             "",
+                             FLAGS_wb_mode,
+                             g_xp_sensor_ptr)) {
+    LOG(ERROR) << "Sensor init failed!";
     return -1;
   }
   if (FLAGS_calib_mode) {
@@ -1200,11 +1201,6 @@ int main(int argc, char** argv) {
   }
   g_img_size.width = width;
   g_img_size.height = height;
-  // FACE is a special XP3
-  if (XP_sensor_type == SensorType::FACE) {
-    g_img_size.height = width;
-    g_img_size.width = height;
-  }
 
   g_has_IR = (XP_sensor_type == SensorType::XPIRL2 || XP_sensor_type == SensorType::XPIRL3);
   if (!FLAGS_record_path.empty()) {
@@ -1295,7 +1291,7 @@ int main(int argc, char** argv) {
       g_visualize_img_lr[1].image_name = "coverage r";
     }
   }
-  // Prepare the thread pool to handle the data from XpSensorMultithread
+  // Prepare the thread pool to handle the data from SensorMultithread
   vector<std::thread> thread_pool;
   thread_pool.push_back(std::thread(thread_proc_img));
   if (g_has_IR) {
@@ -1310,7 +1306,7 @@ int main(int argc, char** argv) {
       thread_pool.push_back(std::thread(thread_save_ir_img));
     }
   }
-  // Register callback functions and let XpSensorMultithread spin
+  // Register callback functions and let SensorMultithread spin
   CHECK(g_xp_sensor_ptr);
   g_xp_sensor_ptr->set_steady_image_callback(image_data_callback);
   if (g_has_IR) {
@@ -1353,17 +1349,24 @@ int main(int argc, char** argv) {
         save_ir_img = true;
       } else if (keypressed != -1) {
         g_xp_sensor_ptr->set_key_control(keypressed);
-        if (g_xp_sensor_ptr->get_ir_on_status()) {
-          cv::namedWindow("img_lr_IR");
-          cv::moveWindow("img_lr_IR", 10, 10);
-          if (FLAGS_depth || FLAGS_ir_depth) {
-            cv::namedWindow("depth_canvas");
-            cv::moveWindow("depth_canvas", 1, 1);
-          }
-        } else {
-          cv::destroyWindow("img_lr_IR");
-          if (FLAGS_depth || FLAGS_ir_depth) {
-            cv::destroyWindow("depth_canvas");
+        // [NOTE](huyuexiang): on some rk sensor, there is a strange key
+        // action detected all the time, so we need to filter out irregular actions.
+        static bool old_status = false;
+        bool cur_status = g_xp_sensor_ptr->get_ir_on_status();
+        if (old_status != cur_status) {
+          old_status = cur_status;
+          if (cur_status) {
+            cv::namedWindow("img_lr_IR");
+            cv::moveWindow("img_lr_IR", 10, 10);
+            if (FLAGS_depth || FLAGS_ir_depth) {
+              cv::namedWindow("depth_canvas");
+              cv::moveWindow("depth_canvas", 1, 1);
+            }
+          } else {
+            cv::destroyWindow("img_lr_IR");
+            if (FLAGS_depth || FLAGS_ir_depth) {
+              cv::destroyWindow("depth_canvas");
+            }
           }
         }
       }
@@ -1377,7 +1380,7 @@ int main(int argc, char** argv) {
     t.join();
   }
   if (!g_xp_sensor_ptr->stop()) {
-    LOG(ERROR) << "XpSensorMultithread failed to stop properly!";
+    LOG(ERROR) << "SensorMultithread failed to stop properly!";
   }
 
   // Release memory first to avoid core dump

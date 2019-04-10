@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -90,6 +90,7 @@ class RingBuffer {
   }
   T  pop_front() {
     // It's the caller's responsibility to check for empty buffer
+    // TODO(mingyu): Need to destroy the popped element.
     T ret = buf_[head_];
     size_--;
     head_ = (head_ + 1) % capacity_;

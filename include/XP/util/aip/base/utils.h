@@ -19,6 +19,7 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 #include <algorithm>
+#include <fstream>
 #include <openssl/md5.h>
 #ifdef _WIN32
 #include <sys/timeb.h>

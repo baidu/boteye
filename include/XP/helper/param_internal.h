@@ -1,5 +1,5 @@
 /******************************************************************************
- * Copyright 2017-2018 Baidu Robotic Vision Authors. All Rights Reserved.
+ * Copyright 2017-2019 Baidu Robotic Vision Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,7 +43,6 @@ class AlgorithmParam : public ParamBase {
     float feature_track_dropout_rate = 0.3f;
   } FeatDetParam;
   struct Mapping_Mode_t {
-    bool use_vio_orientation_as_absolute = false;
     bool compute_cov = true;
     bool fix_latest_rig_at_ba = true;
     bool modify_prescan_map = false;
@@ -53,6 +52,8 @@ class AlgorithmParam : public ParamBase {
     std::string mapper_type = "normal";
     std::string tag_family = "36h11";
     bool mirror_tag_detection = false;
+    bool negative_image = false;
+    int xd_mode = 0;
   } MappingMode;
   struct Mapping_t {
     float max_feature_search_range = 20.f / 400.f;
@@ -65,6 +66,8 @@ class AlgorithmParam : public ParamBase {
                                         // than max_neighour_rig_dis, do not count it as key rig
     float orb_match_dist_thresh = 0.2 * 255;
     float orb_match_thresh_test_ratio = 0.8;
+    float keyrig_tran_thresh = 0.2;  // Insert a keyrig when translation (m) is larger than this
+    float keyrig_rot_thresh = 25.f;  // Insert a keyrig when rotation (deg) is larger than this
     int local_ba_min_movalble_rig_num = 1;
     int local_ba_max_movalble_rig_num = 5;
     int feat_det_num = 200;
@@ -86,10 +89,8 @@ class AlgorithmParam : public ParamBase {
     float orb_match_thresh_test_ratio = 0.9;
     float feature_uncertainty = 5;
     bool use_of_id = true;
-    bool use_april_tag = false;
     std::string slave_det = "direct";
     bool undistort_before_vio = true;
-    bool negative_image = false;
   } Tracking;
   struct Reloc_t {
     float min_reloc_match_score = std::numeric_limits<float>::min();
@@ -106,6 +107,9 @@ class AlgorithmParam : public ParamBase {
     bool redo_bootstrap = true;  // re-bootstrap the query pose to the best ref pose
     bool use_input_rotation = false;  // only solve translation
     int H_max_plane_num = 3;
+    int min_reloc_tag_corners = 8;  // Minimal tag corner 2D-3D observations required for tag reloc
+    bool prune_bad_tags = true;  // Heuristically prune bad tags from solvePnPRansac
+    float refine_tag_depth = 4;  // Refine tag map points that are further than this threshold
   } Reloc;
   struct Depth_t {
     int horizontal_bucket_num = 16;
@@ -146,19 +150,28 @@ class NaviParam : public ParamBase {
     Eigen::Matrix4f T_AD = Eigen::Matrix4f::Identity();
     bool fuse_wheel_odom_pose = false;
     bool wheel_odom_vel_feedback = true;
+    bool enable_visual_depth_in_RL = true;
+    float force_reloc_distance = 10.0;
+    float force_reloc_angle = 10 * M_PI;
+    float anchor_min_interval_time = 2.0;
     float base_velocity = 0.4;  // meter per second
     int grid_cell_size_x = 100;
     int grid_cell_size_y = 100;
     float grid_resolution = 0.05;
     int lost_recovery_timeout = 60;
     bool enable_obstacle_avoid = false;
+    std::string oa_path_planner = "safe_bfs";
     bool hierarchical_infalte = true;
     bool use_global_occ_grid_prior = false;
-    float safe_obstacle_distance = 0.4;
+    float visual_safe_distance = 0.4;
+    float lidar_safe_distance = 0.3;
+    float lidar_obstacle_angle_range = M_PI;
     float valid_obstacle_dist_range = 2.0;
     float valid_obstacle_angle_range = M_PI / 3;
-    float virtual_clear_range = 3.0;
+    float oa_path_update_time_gap = 1.0;
     float road_width = 3;
+    float zone_range = 1.0;
+    float near_force_reloc_place_dist = 0.1;
     float control_frequency = 20;
     float update_frequency = 20;
   } Navigation;
@@ -172,17 +185,24 @@ class NaviParam : public ParamBase {
     float device_radius = 0.3;
     uint8_t ultrasound_flag = 0;
     Eigen::Matrix4f T_AL = Eigen::Matrix4f::Identity();
-    float lidar_obs_dist_thres = 0.5;
-    float lidar_obs_angle_thres = M_PI_2;
     // only for ROS
     std::string odom_topic = "odom";
     std::string diag_topic = "diagnostics";
     std::string cmd_topic = "cmd_vel";
+    std::string navi_status_topic = "navi_status";
   } Actuator;
   struct LidarConfig_t {
     std::string type = "none";
     std::string serial_dev = "/dev/ttyUSB1";
-    float min_valid_scan_dist = 0.2;
+    float min_valid_scan_dist_for_robot = 0.2;
+    int scan_size = 0;
+    float angle_min = 0;
+    float angle_max = 0;
+    float angle_increment = 0;
+    float time_increment = 0;
+    float scan_time = 0;
+    float range_min = 0;
+    float range_max = 0;
     // Only for ROS Scanner
     std::string scan_topic = "scan";
     std::string diag_topic = "diagnostics";

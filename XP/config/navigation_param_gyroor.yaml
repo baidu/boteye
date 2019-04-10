@@ -6,19 +6,26 @@ Actuator:
   axis_diameter: 0.346 # length of the axis between two wheels
   wheel_diameter: 0.12  # (m)
   ultrasound_flag: 0  # 1 A 2 B 4 C 8 D 16 E 32 F 64 G 128 H
-  device_radius: 0.3 # radius of the circumscribed circle of robot
-  lidar_obs_dist_thres: 0.7
-  lidar_obs_angle_thres: 1.5708
+  device_radius: 0.35 # radius of the circumscribed circle of robot
   T_AL: # transformation matrix from actuator to see lidar
-    - [0, -1, 0, 0]
-    - [1, 0, 0, -0.1]
-    - [0, 0, 1, 0]
+    - [0, 1, 0, 0]
+    - [1, 0, 0, 0.05]
+    - [0, 0, -1, 0]
     - [0, 0, 0, 1]
 
 Lidar:
   type: none
   serial_dev: /dev/ttyUSB1
-  min_valid_scan_dist: 0.15
+  min_valid_scan_dist_for_robot: 0.15
+  # "rplidar", "ls01b", "ls01d" have default values, if necessary to override the default values.
+  # scan_size: 0  # Radar line number
+  # range_min: 0  # maximum range value [m]
+  # range_max: 0  # minimum range value [m]
+  # scan_time: 0  # time between scans [seconds]
+  # time_increment: 0  # time between measurements [seconds]
+  # angle_min: 0  # start angle of the scan [rad]
+  # angle_max: 0  # end angle of the scan [rad]
+  # angle_increment: 0  # angular distance between measurements [rad]
 
 Navigation:
   type: navi  # navi or robot or walk. (robot or walk are path follower based. To-be deprecated)
@@ -32,18 +39,27 @@ Navigation:
     - [0, 0, 0, 1]
   fuse_wheel_odom_pose: false # use fusion pose (slam & wheel odom) to improve localization
   wheel_odom_vel_feedback: true # use wheel odom velocity feedback to improve PD control
+  enable_visual_depth_in_RL: true # use visual depth as a part of RL mode inputs
+  force_reloc_distance: 10 # maximum navi distance since last pose update in fusion mode (m)
+  force_reloc_angle: 31.41593 # maximum rotation angle since last pose update in fusion mode (rad)
+  anchor_min_interval_time: 120 # maximum time since last reloc (s)
   base_velocity: 0.3 # meter per second.  Only used by simple controller (to-be deprecated)
   lost_recovery_timeout: 30 # timeout threshold in lost recovery status (s)
   enable_obstacle_avoid: true # enable the latest obstacles circumvent strategy
+  oa_path_planner: safe_bfs # obstacle avoidance path planner type
   grid_cell_size_x: 200 # local grid size in X dimension
   grid_cell_size_y: 200 # local grid size in Y dimension
   grid_resolution: 0.05 # local grid resolution (m)
-  hierarchical_infalte: true # use multiple inflate radius: 1.2, 1.1, 1.0, 0.9 times of device radius
-  safe_obstacle_distance: 0.3 # if the dist between device_radius and obstacle is less than the thresh, OA will be triggered (m)
+  hierarchical_infalte: false # use multiple inflate radius: 1.2, 1.1, 1.0, 0.9 times of device radius
+  visual_safe_distance: 0.3  # if the dist between device_radius and obstacle is less than the thresh, OA will be triggered (m)
+  lidar_safe_distance: 0.2  # if the dist between device_radius and lidar obstacle is less than the thresh, OA will be triggered (m)
+  lidar_obstacle_angle_range: 1.5708  # use lidar beams in the angle range to determine if a dangerous obstacle is detected (rad)
   valid_obstacle_dist_range: 2.0 # use obstacles closer than this distance as input of navigation logic (m)
   valid_obstacle_angle_range: 1.309 # use obstacles in this horizontal angle range as input of navigation logic (rad)
-  virtual_clear_range: 3.0 # Used to clear obstacles when no obstacle is detected on a ray
+  oa_path_update_time_gap: 1.0 # time gap of automatic path search in Obstacle Avoidance (s)
   road_width: 3.0 # the valid width of road for local path search in obstacles circumvent mode (m)
+  zone_range: 1.0  # robot is considered belongs to a zone when the distance is less than this thres (m)
+  near_force_reloc_place_dist: 0.1  # If the min distance between robot and target places is below this, force reloc. (m)
   control_frequency: 20  # the frequency to update and control actuator (hz)
   update_frequency: 20  # the frequency to update the navigator (hz)
 
@@ -59,7 +75,7 @@ Controller:
   kp_w: 0.8 # 0.51 P param of angular velocity
   kp_acc_v: 0.2 # P param of linear acceleration
   kp_acc_v_stop: 0.25 # P param of linear acceleration in stop motion
-  kp_acc_w: 0.5 # P param of angular acceleration
+  kp_acc_w: 1.0 # P param of angular acceleration
   velocity_multiplier: 1.0  # Multiplier for network velocity output
   angular_multiplier: 1.0  # Multiplier for network angular output
   robot_radius_multiplier: 2.0  # Radius as a multiplier of the original turtlebot radius
